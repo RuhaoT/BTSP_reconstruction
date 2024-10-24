@@ -12,6 +12,7 @@ BTSP_layer = BTSPLayer(input_dim=10, memory_neurons=5, fq=0.5, fw=0.5)
 from abc import ABC, abstractmethod
 from typing import List
 import torch
+from dataclasses import dataclass
 
 
 # Layer Behavior
@@ -77,16 +78,23 @@ class LayerWeightReset(ABC):
 
 
 # derived layer classes
+@dataclass
+class TopKLayerParams:
+    """Parameter Dataclass for Top-K layer"""
+
+    top_k: int
+
+
 class TopKLayer(LayerForward):
     """
     This is the class for the top-k layer.
     """
 
-    def __init__(self, top_k: int) -> None:
+    def __init__(self, params: TopKLayerParams) -> None:
         """
         This is the constructor of the class.
         """
-        self.top_k = top_k
+        self.top_k = params.top_k
 
     def forward(self, input_data: torch.Tensor) -> torch.Tensor:
         """
@@ -100,16 +108,23 @@ class TopKLayer(LayerForward):
         return output_data
 
 
+@dataclass
+class StepLayerParams:
+    """Parameter Dataclass for Step layer"""
+
+    threshold: float
+
+
 class StepLayer(LayerForward):
     """
     This is the class for the step layer.
     """
 
-    def __init__(self, threshold: float) -> None:
+    def __init__(self, params: StepLayerParams) -> None:
         """
         This is the constructor of the class.
         """
-        self.threshold = threshold
+        self.threshold = params.threshold
 
     def forward(self, input_data: torch.Tensor) -> torch.Tensor:
         """
@@ -118,16 +133,23 @@ class StepLayer(LayerForward):
         return input_data > self.threshold
 
 
+@dataclass
+class RectifierLayerParams:
+    """Parameter Dataclass for Rectifier layer"""
+
+    threshold: float
+
+
 class RectifierLayer(LayerForward):
     """
     This is the class for the rectifier layer.
     """
 
-    def __init__(self, threshold: float) -> None:
+    def __init__(self, params: RectifierLayerParams) -> None:
         """
         This is the constructor of the class.
         """
-        self.threshold = threshold
+        self.threshold = params.threshold
 
     def forward(self, input_data: torch.Tensor) -> torch.Tensor:
         """
@@ -140,22 +162,29 @@ class RectifierLayer(LayerForward):
         return output_data
 
 
+@dataclass
+class FlyHashingLayerParams:
+    """Parameter Dataclass for Fly-hashing layer"""
+
+    input_dim: int
+    output_dim: int
+    sparsity: float
+    device: str
+
+
 class FlyHashingLayer(LayerForward, LayerWeightReset):
     """
     This is the class for the fly hashing layer.
     """
 
-    def __init__(
-        self, input_dim: int, output_dim: int, sparsity: float, device="cpu"
-    ) -> None:
+    def __init__(self, params: FlyHashingLayerParams) -> None:
         """
         This is the constructor of the class.
         """
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.sparsity = sparsity
-        self.device = device
-        self.weights = None
+        self.input_dim = params.input_dim
+        self.output_dim = params.output_dim
+        self.sparsity = params.sparsity
+        self.device = params.device
         self.weight_reset()
 
     def forward(self, input_data: torch.Tensor) -> torch.Tensor:
@@ -175,18 +204,27 @@ class FlyHashingLayer(LayerForward, LayerWeightReset):
         )
 
 
+@dataclass
+class HebbianFeedbackLayerParams:
+    """Parameter Dataclass for Hebbian feedback layer"""
+
+    input_dim: int
+    output_dim: int
+    device: str
+
+
 class HebbianFeedbackLayer(LayerFeedback, LayerLearn, LayerWeightReset):
     """
     This is the class for the Hebbian feedback layer.
     """
 
-    def __init__(self, input_dim: int, output_dim: int, device="cpu") -> None:
+    def __init__(self, params: HebbianFeedbackLayerParams) -> None:
         """
         This is the constructor of the class.
         """
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.device = device
+        self.input_dim = params.input_dim
+        self.output_dim = params.output_dim
+        self.device = params.device
         # note the weights are stored in an transposed way
         self.weights = None
         self.weight_reset()
@@ -233,6 +271,17 @@ class HebbianFeedbackLayer(LayerFeedback, LayerLearn, LayerWeightReset):
         ).bool()
 
 
+@dataclass
+class BTSPLayerParams:
+    """Parameter Dataclass for BTSP layer"""
+
+    input_dim: int
+    memory_neurons: int
+    fq: float
+    fw: float
+    device: str
+
+
 class BTSPLayer(LayerForward, LayerLearn, LayerLearnForward, LayerWeightReset):
     """This is the class for BTSP layer.
 
@@ -246,20 +295,13 @@ class BTSPLayer(LayerForward, LayerLearn, LayerLearnForward, LayerWeightReset):
         connection_matrix: The matrix describing which neurons are connected.
     """
 
-    def __init__(
-        self,
-        input_dim: int,
-        memory_neurons: int,
-        fq: float,
-        fw: float,
-        device="cpu",
-    ) -> None:
+    def __init__(self, params: BTSPLayerParams) -> None:
         """Initialize the layer."""
-        self.input_dim = input_dim
-        self.memory_neurons = memory_neurons
-        self.fq = fq
-        self.fw = fw
-        self.device = device
+        self.input_dim = params.input_dim
+        self.memory_neurons = params.memory_neurons
+        self.fq = params.fq
+        self.fw = params.fw
+        self.device = params.device
         self.weights = None
         self.connection_matrix = None
         self.weight_reset()

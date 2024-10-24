@@ -7,6 +7,7 @@ import time
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+
 def init_experiment_folder(data_folder: str, experiment_name: str = "data"):
     """This function initializes the experiment folder.
 
@@ -28,10 +29,11 @@ def init_experiment_folder(data_folder: str, experiment_name: str = "data"):
 
     return experiment_folder
 
+
 # Rewriting the class again with the necessary imports
 class ParquetTableRecorder:
     """This class is used to record experiment results in parquet format."""
-    
+
     def __init__(self, filepath: str, schema: pa.Schema, batch_size: int = 100):
         """
         Initializes a new parquet file for recording.
@@ -65,10 +67,10 @@ class ParquetTableRecorder:
         """
         # Convert the record data to a pyarrow table
         table = pa.Table.from_pydict(record_data, schema=self.schema)
-        
+
         # Add new data to the current batch
         self.batch.append(table)
-        
+
         # Check if the batch size has been exceeded
         if len(self.batch) >= self.batch_size:
             self._write_batch()
