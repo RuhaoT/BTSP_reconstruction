@@ -46,5 +46,5 @@ class BHNetwork:
 
     def reconstruct(self, input_data: torch.Tensor):
         """Reconstruct the input data."""
-        hebbian_output = self.hebbian_feedback_nobinarize(input_data)
+        hebbian_output = self.hebbian_feedback.feedback(input_data)
         return hebbian_output

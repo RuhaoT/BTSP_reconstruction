@@ -55,10 +55,6 @@ class BTSPOnlyExperiment(ExperimentInterface):
         ).tolist()  # sparseness of the EACH memory item
         self.fw = 1  # sparseness of the weight matrix
         self.output_dim = 3900
-        self.memory_topk = self.output_dim * np.linspace(
-            0.001, 0.025, 9
-        )  # topk for the memory neuron to fire
-        self.memory_topk = [int(i) for i in self.memory_topk]
         self.memory_topk = 15
         self.feedback_threshold = 0  # threshold for the memory neuron to fire
         self.params_network = custom_networks.b_h_network.BHNetworkParams(
