@@ -9,10 +9,10 @@ Example:
 BTSP_layer = BTSPLayer(input_dim=10, memory_neurons=5, fq=0.5, fw=0.5)
 """
 
+from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from typing import List
 import torch
-from dataclasses import dataclass
 
 
 # Layer Behavior
@@ -34,7 +34,7 @@ class LayerFeedback(ABC):
     """
 
     @abstractmethod
-    def feedback(self, upper_feedback_data):
+    def forward(self, upper_feedback_data):
         """
         This is the method that performs the feedback pass.
         """
@@ -205,7 +205,7 @@ class FlyHashingLayer(LayerForward, LayerWeightReset):
 
 
 @dataclass
-class HebbianFeedbackLayerParams:
+class HebbianLayerParams:
     """Parameter Dataclass for Hebbian feedback layer"""
 
     input_dim: int
@@ -213,12 +213,12 @@ class HebbianFeedbackLayerParams:
     device: str
 
 
-class HebbianFeedbackLayer(LayerFeedback, LayerLearn, LayerWeightReset):
+class HebbianLayer(LayerForward, LayerLearn, LayerWeightReset):
     """
     This is the class for the Hebbian feedback layer.
     """
 
-    def __init__(self, params: HebbianFeedbackLayerParams) -> None:
+    def __init__(self, params: HebbianLayerParams) -> None:
         """
         This is the constructor of the class.
         """
@@ -229,11 +229,11 @@ class HebbianFeedbackLayer(LayerFeedback, LayerLearn, LayerWeightReset):
         self.weights = None
         self.weight_reset()
 
-    def feedback(self, upper_feedback_data: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_data: torch.Tensor) -> torch.Tensor:
         """
         This is the method that performs the feedback pass.
         """
-        output_data = torch.matmul(upper_feedback_data.float(), self.weights.float())
+        output_data = torch.matmul(input_data.float(), self.weights.float())
         return output_data
 
     def learn(self, training_data: List) -> None:
@@ -258,16 +258,14 @@ class HebbianFeedbackLayer(LayerFeedback, LayerLearn, LayerWeightReset):
         hebbian_weight_change = hebbian_weight_change.sum(dim=0).bool()
 
         # update the weights
-        self.weights = torch.logical_or(
-            self.weights, torch.transpose(hebbian_weight_change, 0, 1)
-        )
+        self.weights = torch.logical_or(self.weights, hebbian_weight_change)
 
     def weight_reset(self) -> None:
         """
         This is the method that reset the weights.
         """
         self.weights = torch.zeros(
-            self.output_dim, self.input_dim, device=self.device
+            self.input_dim, self.output_dim, device=self.device
         ).bool()
 
 
@@ -347,14 +345,14 @@ class BTSPLayer(LayerForward, LayerLearn, LayerLearnForward, LayerWeightReset):
 
             # weight_change_sequence is a binary matrix, indicating the update of
             # each weight during the training process
-            weight_change_sequence = (
+            weight_change_sum = (
                 weight_change_allowance_synapse * training_data.unsqueeze(2)
             )
 
             # weight_change_sum is the number of total weight changes for each synapse
             # as weights are binary, the sum is the number of changes
             # shape: (batch_size, input_dim, memory_neurons)
-            weight_change_sum = torch.cumsum(weight_change_sequence.int(), dim=0) % 2
+            weight_change_sum = torch.cumsum(weight_change_sum.int(), dim=0) % 2
 
             # weight sequence is the weight after each training data
             weight_sequence = torch.where(

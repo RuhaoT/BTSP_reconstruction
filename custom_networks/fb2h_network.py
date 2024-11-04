@@ -7,21 +7,24 @@ network.
 
 from dataclasses import dataclass
 import torch
-from custom_networks import f_h_network, simple_btsp_feedback_deprecated
+from custom_networks import f_h_network, b_h_network
 
 @dataclass
 class FB2HNetworkParams:
+    """Params for FB-2H network"""
+    fly_hashing_feedback: f_h_network.FHNetworkParams
+    simple_btsp_feedback: b_h_network.BHNetworkParams
 
-class FB2HNetwork:
+class FB2HNetwork():
     """FB-2H network."""
 
-    def __init__(self, params: dict) -> None:
+    def __init__(self, params: FB2HNetworkParams) -> None:
         """Constructor."""
         self.fly_hashing_feedback = f_h_network.FHNetwork(
-            params["F-H"]
+            params.fly_hashing_feedback
         )
-        self.simple_btsp_feedback = simple_btsp_feedback_deprecated.SimpleBTSPFeedbackNetwork(
-            params["B-H"]
+        self.simple_btsp_feedback = b_h_network.BHNetwork(
+            params.simple_btsp_feedback
         )
         self.reset_weights()
 
@@ -50,11 +53,11 @@ class FB2HNetwork:
         fly_hashing_output = self.fly_hashing_feedback.reconstruct(simple_btsp_output)
         return fly_hashing_output
 
-    def feedback_btsp(self, input_data: torch.Tensor):
-        """Feedback the BTSP layer."""
-        return self.simple_btsp_feedback.hebbian_feedback(input_data)
+    def feedback_btsp_nobinarize(self, input_data: torch.Tensor):
+        """Feedback the BTSP layer without setting the fire threshold."""
+        return self.simple_btsp_feedback.hebbian_feedback_nobinarize(input_data)
 
-    def feedback_fh(self, input_data: torch.Tensor):
+    def feedback_fh_nobinarize(self, input_data: torch.Tensor):
         """Feedback the Fly-hashing layer with the reconstructed data for B-H."""
-        btsp_reconstruction = self.simple_btsp_feedback.reconstruct(input_data)
-        return self.fly_hashing_feedback.hebbian_feedback(btsp_reconstruction)
+        btsp_reconstruction = self.feedback_btsp_nobinarize(input_data)
+        return self.fly_hashing_feedback.hebbian_feedback_nobinarize(btsp_reconstruction)

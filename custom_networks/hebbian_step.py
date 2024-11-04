@@ -6,32 +6,32 @@ from experiment_framework.utils import layers
 
 
 @dataclass
-class HebbianStepFeedbackNetworkParams:
+class HebbianStepNetworkParams:
     """Parameters for Hebbian step feedback network."""
 
-    hebbian: layers.HebbianFeedbackLayerParams
+    hebbian: layers.HebbianLayerParams
     hebbian_feedback_threshold: layers.StepLayerParams
 
 
-class HebbianStepFeedbackNetwork:
+class HebbianStepNetwork:
     """Hebbian step feedback network."""
 
-    def __init__(self, params: HebbianStepFeedbackNetworkParams) -> None:
+    def __init__(self, params: HebbianStepNetworkParams) -> None:
         """Constructor."""
-        self.hebbian = layers.HebbianFeedbackLayer(params.hebbian)
+        self.hebbian = layers.HebbianLayer(params.hebbian)
         self.hebbian_feedback_threshold = layers.StepLayer(
             params.hebbian_feedback_threshold
         )
         self.reset_weights()
-        
-    def feedback_nobinarize(self, input_data: torch.Tensor):
-        """Feedback the Hebbian layer."""
-        hebbian_output = self.hebbian.feedback(input_data)
+
+    def forward_nobinarize(self, input_data: torch.Tensor):
+        """Forward the Hebbian layer."""
+        hebbian_output = self.hebbian.forward(input_data)
         return hebbian_output
 
-    def feedback(self, input_data: torch.Tensor):
-        """Feedback the Hebbian layer."""
-        hebbian_output = self.feedback_nobinarize(input_data)
+    def forward(self, input_data: torch.Tensor):
+        """Forward the Hebbian layer."""
+        hebbian_output = self.forward_nobinarize(input_data)
         return self.hebbian_feedback_threshold.forward(hebbian_output)
 
     def learn(self, input_data: torch.Tensor):

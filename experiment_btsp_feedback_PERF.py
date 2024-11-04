@@ -7,6 +7,7 @@ import os
 import dataclasses
 import numpy as np
 import torch
+from torch.profiler import profiler, record_function
 import pyarrow as pa
 from pyarrow import parquet as pq
 import matplotlib as mpl
@@ -18,9 +19,9 @@ from experiment_framework.auto_experiment.auto_experiment import (
 from experiment_framework.utils import parameterization, logging, layers
 from custom_networks import b_h_network, hebbian_step, btsp_step_topk
 
-# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 REPEAT_NUM = 1
-BATCH_SIZE = 30
+BATCH_SIZE = 25
 
 
 @dataclasses.dataclass
@@ -49,19 +50,13 @@ class BTSPOnlyExperiment(ExperimentInterface):
     def __init__(self):
         """Constructor."""
 
-        self.memory_item = np.arange(
-            2000, 40000, 5000
-        ).tolist()  # number of memory items
+        self.memory_item = np.arange(10, 200, 50).tolist()  # number of memory items
         # self.memory_item = 200
         self.memory_dim = 2500
         self.fp = np.linspace(
-            0.0005, 0.1, 10
-        ).tolist()  # sparseness of the EACH memory item, fix to 0.01
-        # self.fp = 0.01
+            0.0005, 0.01, 4
+        ).tolist()  # sparseness of the EACH memory item
         self.fw = 1  # sparseness of the weight matrix
-        # self.fq = np.linspace(0.001, 0.01, 10).tolist()
-        # 保证3-5neuro激活的基础上越小越好，0.0005/0.001 comparison
-        self.fq = [0.001, 0.0005]
         self.output_dim = 3900
         self.memory_topk = 15
         self.feedback_threshold = 0  # threshold for the memory neuron to fire
@@ -70,7 +65,7 @@ class BTSPOnlyExperiment(ExperimentInterface):
                 btsp=layers.BTSPLayerParams(
                     input_dim=self.memory_dim,
                     memory_neurons=self.output_dim,
-                    fq=self.fq,
+                    fq=np.linspace(0.001, 0.01, 10).tolist(),
                     fw=self.fw,
                     device="cuda",
                 ),
@@ -83,7 +78,7 @@ class BTSPOnlyExperiment(ExperimentInterface):
             ),
             hebbian_step_feedback=hebbian_step.HebbianStepNetworkParams(
                 hebbian=layers.HebbianLayerParams(
-                    input_dim=self.output_dim,  # Note this is a feedback layer
+                    input_dim=self.output_dim, # Note this is a feedback layer
                     output_dim=self.memory_dim,
                     device="cuda",
                 ),
@@ -136,79 +131,96 @@ class BTSPOnlyExperiment(ExperimentInterface):
 
     def execute_experiment_process(self, parameters: ExperimentParams, dataset):
         with torch.no_grad():
-            dataset = (
-                torch.rand(
-                    size=[
-                        parameters.dataset_params.memory_item,
-                        parameters.dataset_params.memory_dim,
-                    ],
+            with record_function("Initialization"):
+                dataset = (
+                    torch.rand(
+                        size=[
+                            parameters.dataset_params.memory_item,
+                            parameters.dataset_params.memory_dim,
+                        ],
+                        device="cuda",
+                    )
+                    < parameters.dataset_params.fp
+                )
+
+                network = b_h_network.BHNetwork(parameters.network_params)
+
+            with record_function("Learning"):
+                # learning phase
+                # batch learning
+                batch_size = min(BATCH_SIZE, parameters.dataset_params.memory_item)
+
+                for batch in range(
+                    0, parameters.dataset_params.memory_item, batch_size
+                ):
+                    network.learn_and_forward(
+                        dataset[
+                            batch : min(
+                                batch + batch_size,
+                                parameters.dataset_params.memory_item,
+                            )
+                        ]
+                    )
+
+            with record_function("Analyze nobinarize result"):
+
+                # testing phase
+                forward_output = network.forward(dataset)
+                reconstructed_output = network.hebbian_feedback_nobinarize(
+                    forward_output
+                )
+
+                # grid search for the best feedback threshold
+                # find the max element in the reconstructed_output
+                max_reconstructed_output = torch.max(reconstructed_output)
+                max_reconstructed_output = torch.maximum(
+                    max_reconstructed_output, torch.tensor(1.0, device="cuda")
+                )
+                # use granularity 5% of the max element
+                candidate_threshold = torch.arange(
+                    0,
+                    max_reconstructed_output,
+                    0.05 * max_reconstructed_output,
                     device="cuda",
                 )
-                < parameters.dataset_params.fp
-            )
-            network = b_h_network.BHNetwork(parameters.network_params)
-            # learning phase
-            # batch learning
-            batch_size = min(BATCH_SIZE, parameters.dataset_params.memory_item)
-            for batch in range(0, parameters.dataset_params.memory_item, batch_size):
-                network.learn_and_forward(
-                    dataset[
-                        batch : min(
-                            batch + batch_size,
-                            parameters.dataset_params.memory_item,
-                        )
-                    ]
-                )
-            # testing phase
-            forward_output = network.forward(dataset)
-            reconstructed_output = network.hebbian_feedback_nobinarize(forward_output)
-            # grid search for the best feedback threshold
-            # find the max element in the reconstructed_output
-            max_reconstructed_output = torch.max(reconstructed_output)
-            max_reconstructed_output = torch.maximum(
-                max_reconstructed_output, torch.tensor(1.0, device="cuda")
-            )
-            # use granularity 5% of the max element
-            candidate_threshold = torch.arange(
-                0,
-                max_reconstructed_output,
-                0.05 * max_reconstructed_output,
-                device="cuda",
-            )
-            min_difference = float("inf")
-            best_threshold = 0
-            for threshold in candidate_threshold:
-                network.hebbian_feedback.hebbian_feedback_threshold.threshold = (
-                    threshold
-                )
-                reconstructed_output = network.reconstruct(forward_output)
-                current_difference = torch.sum(reconstructed_output != dataset).item()
-                if current_difference < min_difference:
-                    min_difference = current_difference
-                    best_threshold = threshold.item()
-            # calculate accuracy
-            accuracy = max(
-                1
-                - min_difference
-                / (
+
+            with record_function("Grid search"):
+                min_difference = float("inf")
+                best_threshold = 0
+
+                for threshold in candidate_threshold:
+                    network.hebbian_feedback.hebbian_feedback_threshold.threshold = (
+                        threshold
+                    )
+                    reconstructed_output = network.reconstruct(forward_output)
+                    current_difference = torch.sum(
+                        reconstructed_output != dataset
+                    ).item()
+                    if current_difference < min_difference:
+                        min_difference = current_difference
+                        best_threshold = threshold.item()
+
+            with record_function("Evaluation"):
+                # calculate accuracy
+                accuracy = 1 - min_difference / (
                     parameters.dataset_params.memory_item
                     * parameters.dataset_params.memory_dim
                     * parameters.dataset_params.fp
-                ),
-                0,
-            )
-            result = {
-                "Memory Items": [parameters.dataset_params.memory_item],
-                "fq": [parameters.network_params.btsp_step_topk_forward.btsp.fq],
-                "fp": [parameters.dataset_params.fp],
-                "MSE": [min_difference],
-                "Optimal threshold": [best_threshold],
-                "Accuracy": [accuracy],
-                "Topk": [
-                    parameters.network_params.btsp_step_topk_forward.btsp_topk.top_k
-                ],
-            }
-            self.data_recorder.record(result)
+                )
+
+                result = {
+                    "Memory Items": [parameters.dataset_params.memory_item],
+                    "fq": [parameters.network_params.btsp_step_topk_forward.btsp.fq],
+                    "fp": [parameters.dataset_params.fp],
+                    "MSE": [min_difference],
+                    "Optimal threshold": [best_threshold],
+                    "Accuracy": [accuracy],
+                    "Topk": [
+                        parameters.network_params.btsp_step_topk_forward.btsp_topk.top_k
+                    ],
+                }
+
+                self.data_recorder.record(result)
             return result
 
     def summarize_results(self):
@@ -218,6 +230,8 @@ class BTSPOnlyExperiment(ExperimentInterface):
 
         # plot the memory capacity
         plot_memory_capacity(self.experiment_folder, self.result_name)
+
+        prof.export_chrome_trace(self.experiment_folder + "/trace.json")
 
 
 def plot_memory_capacity(experiment_folder, result_name):
@@ -236,13 +250,18 @@ def plot_memory_capacity(experiment_folder, result_name):
         [("Accuracy", "mean")]
     )
 
+    # find optimal accuracy for the fq dimension
+    table = table.group_by(["Memory Items", "fp", "Topk"]).aggregate(
+        [("Accuracy_mean", "max")]
+    )
+
     # 3. plot the 3D graph
     fig = plt.figure()
-    # for each different fq, add a subplot
-    # find all different fq values
-    fq_values = table.column("fq").to_numpy()
-    unique_fq_values = np.unique(fq_values)
-    subplot_num = len(unique_fq_values)
+    # for each different topk, add a subplot
+    # find all different topk values
+    topk_values = table.column("Topk").to_numpy()
+    unique_topk_values = np.unique(topk_values)
+    subplot_num = len(unique_topk_values)
     subplot_cols = np.ceil(np.sqrt(subplot_num)).astype(int)
     subplot_rows = np.ceil(subplot_num / subplot_cols).astype(int)
     # adjust figure size based on the subplot number
@@ -250,12 +269,12 @@ def plot_memory_capacity(experiment_folder, result_name):
     vmin = 0
     vmax = 1
 
-    for index, fq in enumerate(unique_fq_values):
+    for index, topk in enumerate(unique_topk_values):
         # filter the table by topk
-        filtered_table = table.filter(table.column("fq") == fq)
+        filtered_table = table.filter(table.column("Topk") == topk)
         # generate subplot position
         ax = fig.add_subplot(subplot_rows, subplot_cols, index + 1, projection="3d")
-        accuracy = filtered_table.column("Accuracy_mean").to_numpy()
+        accuracy = filtered_table.column("Accuracy_mean_max").to_numpy()
         error_rate = 1 - accuracy
         ax.plot_trisurf(
             filtered_table.column("fp").to_numpy(),
@@ -266,7 +285,7 @@ def plot_memory_capacity(experiment_folder, result_name):
             vmin=vmin,
             vmax=vmax,
         )
-        ax.set_title(f"fq = {fq}", y=1.0)
+        ax.set_title(f"Topk = {topk}", y=1.0)
         ax.set_xlabel("fp")
         ax.set_ylabel("Memory Items")
         ax.set_zlabel("Error Rate")
@@ -298,7 +317,15 @@ def plot_memory_capacity(experiment_folder, result_name):
 # main function
 if __name__ == "__main__":
     experiment = SimpleBatchExperiment(BTSPOnlyExperiment(), REPEAT_NUM)
-    experiment.run()
+    with profiler.profile(
+        activities=[
+            profiler.ProfilerActivity.CPU,
+            profiler.ProfilerActivity.CUDA,
+        ],
+        record_shapes=True,
+    ) as prof:
+        experiment.run()
     experiment.evaluate()
-    # plot_memory_capacity("data/B-H_network_exp_20241103-160609", "results.parquet")
+    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=15))
+    # plot_memory_capacity("data/B-H_network_exp_20241023-113402", "results.parquet")
     print("Experiment finished.")
