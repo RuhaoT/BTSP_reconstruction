@@ -193,7 +193,7 @@ class FlyHashingMemCapExperiment(ExperimentInterface):
                 feedback_nobinarize > sparsity_based_threshold
             )
             sparsity_error = torch.sum(sparsity_based_reconstruction != dataset)
-            sparsity_error_rate = min(sparsity_error / avg_activated_neuro, 1)
+            sparsity_error_rate = torch.min(sparsity_error / avg_activated_neuro, 1)
 
             # 2. grid search
             # use 5% granularity
@@ -204,7 +204,7 @@ class FlyHashingMemCapExperiment(ExperimentInterface):
                 mse[i] = torch.sum(feedback != dataset)
             grid_search_threshold = threshold_candidates[torch.argmin(mse)]
             grid_search_error = torch.min(mse)
-            grid_search_error_rate = min(grid_search_error / avg_activated_neuro, 1)
+            grid_search_error_rate = torch.min(grid_search_error / avg_activated_neuro, 1)
 
             result = {
                 "Memory Items": [parameters.dataset_params.memory_item],
