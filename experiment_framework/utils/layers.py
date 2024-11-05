@@ -191,7 +191,7 @@ class FlyHashingLayer(LayerForward, LayerWeightReset):
         """
         This is the method that performs the forward pass.
         """
-        output_data = torch.matmul(input_data, self.weights)
+        output_data = torch.matmul(input_data, self.weights.float())
         return output_data
 
     def weight_reset(self) -> None:
