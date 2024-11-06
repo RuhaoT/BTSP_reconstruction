@@ -97,8 +97,6 @@ class ParquetTableRecorder:
         """
         # Convert the record data to a pyarrow table
         table = pa.Table.from_pydict(record_data, schema=self.schema)
-        # print schema
-        print(self.schema)
 
         # Add new data to the current batch
         self.batch.append(table)
