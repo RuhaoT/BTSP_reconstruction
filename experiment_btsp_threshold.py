@@ -113,7 +113,7 @@ class BTSPOnlyExperiment(ExperimentInterface):
         )
 
         # data recording
-        self.experiment_name = "B-H_network_exp"
+        self.experiment_name = "B-H_threshold_exp"
         self.data_folder = "data"
         self.result_name = "results.parquet"
         self.params_name = "params.json"
