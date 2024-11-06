@@ -4,6 +4,8 @@
 
 import os
 import time
+import dataclasses
+import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -28,6 +30,34 @@ def init_experiment_folder(data_folder: str, experiment_name: str = "data"):
         raise ValueError("Experiment folder already exists.")
 
     return experiment_folder
+
+def dataclass_to_pyarrow_schema(dataclass: dataclasses.dataclass) -> pa.Schema:
+    """Converts a dataclass to a pyarrow schema.
+
+    Args:
+        dataclass (dataclass): The dataclass to convert.
+
+    Returns:
+        pa.Schema: The pyarrow schema.
+    """
+    pa_fields = []
+    for field in dataclasses.fields(dataclass):
+        field_name = field.name
+        field_type = field.type
+        pa_field = pa.field(field_name, field_type())
+        pa_fields.append(pa_field)
+    return pa.schema(pa_fields)
+
+def save_dataclass_to_json(dataclass: dataclasses.dataclass, filepath: str, encoding: str = "utf-8"):
+    """Saves a dataclass to a json file.
+
+    Args:
+        dataclass (dataclass): The dataclass to save.
+        filepath (str): The path to save the dataclass.
+    """
+    data = dataclasses.asdict(dataclass)
+    with open(filepath, "w", encoding=encoding) as f:
+        json.dump(data, f)
 
 
 # Rewriting the class again with the necessary imports
@@ -67,6 +97,8 @@ class ParquetTableRecorder:
         """
         # Convert the record data to a pyarrow table
         table = pa.Table.from_pydict(record_data, schema=self.schema)
+        # print schema
+        print(self.schema)
 
         # Add new data to the current batch
         self.batch.append(table)

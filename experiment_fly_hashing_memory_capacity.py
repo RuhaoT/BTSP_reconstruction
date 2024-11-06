@@ -20,7 +20,7 @@ from custom_networks import f_h_network, fly_hashing_step_topk, hebbian_step
 
 # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 REPEAT_NUM = 2
-BATCH_SIZE = 30
+BATCH_SIZE = 500
 
 
 @dataclasses.dataclass
@@ -59,7 +59,7 @@ class FlyHashingMemCapExperiment(ExperimentInterface):
         """Constructor."""
 
         self.memory_item = np.arange(
-            500, 30000, 3000
+            1, 4000, 100
         ).tolist()  # number of memory items
         # self.memory_item = 200
         self.input_dim = 88  # dimension of the memory item
@@ -72,7 +72,7 @@ class FlyHashingMemCapExperiment(ExperimentInterface):
             int(x) for x in (self.output_dim * np.array(self.output_sparsity))
         ]
         self.device = "cuda"
-        self.kc_sample = np.arange(2, 12, 1).tolist()  # input synapses for KC cells
+        self.kc_sample = np.arange(50, 100, 5).tolist()  # input synapses for KC cells
         total_synapses = [x * self.output_dim for x in self.kc_sample]
         self.weight_sparsity = [
             (x / self.output_dim / self.input_dim) for x in total_synapses
@@ -181,19 +181,18 @@ class FlyHashingMemCapExperiment(ExperimentInterface):
                 * parameters.dataset_params.memory_item
                 * parameters.dataset_params.fp
             )
-            sparsity_based_threshold = (
-                torch.topk(
-                    feedback_nobinarize.flatten(), avg_activated_neuro, largest=True
-                ).values[-1]
-                - 1e-5
-            )
+            
+            topk_filter = torch.topk(feedback_nobinarize.flatten(), avg_activated_neuro + 1, largest=True)
+            min_firing_value = topk_filter.values[-2]
+            max_resting_value = topk_filter.values[-1]
+            sparsity_based_threshold = (min_firing_value + max_resting_value) / 2
 
             # test difference error
             sparsity_based_reconstruction = (
                 feedback_nobinarize > sparsity_based_threshold
             )
             sparsity_error = torch.sum(sparsity_based_reconstruction != dataset)
-            sparsity_error_rate = torch.min(sparsity_error / avg_activated_neuro, 1)
+            sparsity_error_rate = min(sparsity_error / avg_activated_neuro, 1)
 
             # 2. grid search
             # use 5% granularity
@@ -204,7 +203,7 @@ class FlyHashingMemCapExperiment(ExperimentInterface):
                 mse[i] = torch.sum(feedback != dataset)
             grid_search_threshold = threshold_candidates[torch.argmin(mse)]
             grid_search_error = torch.min(mse)
-            grid_search_error_rate = torch.min(grid_search_error / avg_activated_neuro, 1)
+            grid_search_error_rate = min(grid_search_error / avg_activated_neuro, 1)
 
             result = {
                 "Memory Items": [parameters.dataset_params.memory_item],
@@ -218,8 +217,8 @@ class FlyHashingMemCapExperiment(ExperimentInterface):
                 ],
                 "Sparsity-based Threshold": [sparsity_based_threshold.item()],
                 "Grid Search Threshold": [grid_search_threshold.item()],
-                "Sparsity Error Rate": [sparsity_error_rate.item()],
-                "Grid Search Error Rate": [grid_search_error_rate.item()],
+                "Sparsity Error Rate": [float(sparsity_error_rate)],
+                "Grid Search Error Rate": [float(grid_search_error_rate)], # for debugging
             }
 
             self.data_recorder.record(result)
