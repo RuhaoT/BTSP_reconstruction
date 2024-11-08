@@ -71,7 +71,7 @@ class LayerWeightReset(ABC):
     """
 
     @abstractmethod
-    def weight_reset(self):
+    def weight_reset(self, *args, **kwargs):
         """
         This is the method that reset the weights.
         """
@@ -194,7 +194,7 @@ class FlyHashingLayer(LayerForward, LayerWeightReset):
         output_data = torch.matmul(input_data, self.weights.float())
         return output_data
 
-    def weight_reset(self) -> None:
+    def weight_reset(self, *args, **kwargs) -> None:
         """
         This is the method that reset the weights.
         """
@@ -241,7 +241,7 @@ class HebbianLayer(LayerForward, LayerLearn, LayerWeightReset):
         This is the method that performs the learning pass.
 
         Args:
-            input_data (torch.Tensor): The input data, note this input data
+            input_data (List): The input data, note this input data
                 requires special format. The first element of the list is the
                 presynaptic data, and the second element of the list is the
                 postsynaptic data. For each tensor, the first dimension is the
@@ -260,7 +260,7 @@ class HebbianLayer(LayerForward, LayerLearn, LayerWeightReset):
         # update the weights
         self.weights = torch.logical_or(self.weights, hebbian_weight_change)
 
-    def weight_reset(self) -> None:
+    def weight_reset(self, *args, **kwargs) -> None:
         """
         This is the method that reset the weights.
         """
@@ -380,12 +380,171 @@ class BTSPLayer(LayerForward, LayerLearn, LayerLearnForward, LayerWeightReset):
         """
         self.learn_and_forward(training_data)
 
-    def weight_reset(self) -> None:
+    def weight_reset(self, *args, **kwargs) -> None:
         """Reset the weights."""
         self.weights = torch.zeros(
             (self.input_dim, self.memory_neurons), device=self.device
         ).bool()
-        self.connection_matrix = (
-            torch.rand((self.input_dim, self.memory_neurons), device=self.device)
-            < self.fw
-        ).bool()
+        if "weight" in kwargs:
+            if kwargs["weight"] is not None:
+                self.weights = kwargs["weight"]
+        else:
+            self.connection_matrix = (
+                torch.rand((self.input_dim, self.memory_neurons), device=self.device)
+                < self.fw
+            ).bool()
+
+
+@dataclass
+class PseudoinverseLayerParams:
+    """Parameter Dataclass for Pseudoinverse layer"""
+
+    input_dim: int
+    output_dim: int
+    device: str
+
+
+class PseudoinverseLayer(
+    LayerForward, LayerFeedback, LayerLearn, LayerLearnForward, LayerWeightReset
+):
+    """This is the class for the Pseudoinverse layer.
+
+    NOTE: This layer takes in {-1, 1} binary input data.
+
+    Attributes:
+        input_dim (int): The input dimension.
+        output_dim (int): The output dimension.
+        device: The device to deploy the layer.
+        weight_forward: The weights of the layer.
+        weight_feedback: The weights of the layer.
+    """
+
+    def __init__(self, params: PseudoinverseLayerParams) -> None:
+        """Initialize the layer."""
+        self.input_dim = params.input_dim
+        self.output_dim = params.output_dim
+        self.device = params.device
+        self.weight_forward = None
+        self.weight_feedback = None
+        self.weight_reset()
+
+    def forward(self, input_data: torch.Tensor) -> torch.Tensor:
+        """Perform the forward pass.
+
+        Simple matrix multiplication between input data and forward weights.
+        A sign function is applied to the output data.
+        """
+
+        output_data = torch.matmul(input_data.float(), self.weight_forward.float())
+        return torch.sign(output_data)
+
+    def feedback(self, upper_feedback_data: torch.Tensor) -> torch.Tensor:
+        """Perform the feedback pass.
+
+        Simple matrix multiplication between feedback data and feedback weights.
+        A sign function is applied to the output data.
+        """
+
+        output_data = torch.matmul(
+            upper_feedback_data.float(), self.weight_feedback.float()
+        )
+        return torch.sign(output_data)
+
+    def weight_reset(self, *args, **kwargs) -> None:
+        """Reset the weights.
+
+        Reset both forward and feedback weights.
+        """
+
+        if "weight_forward" in kwargs:
+            if kwargs["weight_forward"] is not None:
+                self.weight_forward = kwargs["weight_forward"]
+        else:
+            self.weight_forward = torch.rand(
+                self.input_dim, self.output_dim, device=self.device
+            )
+
+        if "weight_feedback" in kwargs:
+            if kwargs["weight_feedback"] is not None:
+                self.weight_feedback = kwargs["weight_feedback"]
+        else:
+            self.weight_feedback = torch.rand(
+                self.output_dim, self.input_dim, device=self.device
+            )
+
+    def learn(self, training_data: List) -> None:
+        """Perform the learning pass.
+
+        Args:
+            training_data (List): The presynaptic and postsynaptic data,
+                both torch.Tensor. The first element of the list is the
+                presynaptic data, and the second element of the list is the
+                postsynaptic data.
+        """
+
+        with torch.no_grad():
+            # calculate pseudo-inverse matrix
+            presynaptic_data = training_data[0]
+            postsynaptic_data = training_data[1]
+            pattern_num = presynaptic_data.shape[0]
+
+            presynaptic_data_pinv = torch.pinverse(presynaptic_data.float())
+            postsynaptic_data_pinv = torch.pinverse(postsynaptic_data.float())
+
+            # update the weights
+            self.weight_forward = torch.matmul(
+                presynaptic_data.float(), postsynaptic_data_pinv
+            )
+            self.weight_feedback = torch.matmul(
+                presynaptic_data_pinv, postsynaptic_data.float()
+            )
+            # scale the weights
+            self.weight_forward = self.weight_forward / pattern_num
+            self.weight_feedback = self.weight_feedback / pattern_num
+
+    def learn_and_forward(self, training_data):
+        """Perform the learning and forward pass.
+
+        Args:
+            training_data (List): The presynaptic and postsynaptic data,
+                both torch.Tensor. The first element of the list is the
+                presynaptic data, and the second element of the list is the
+                postsynaptic data.
+        """
+
+        self.learn(training_data)
+        return self.forward(training_data[0])
+
+
+class BinaryFormatConversionLayer:
+    """This is a special layer for the binary format conversion.
+
+    Provide converting options between {-1, 1} and {0, 1} binary format.
+    """
+
+    def __init__(self) -> None:
+        """No need to initialize anything."""
+
+    def dense_to_sparse(self, input_data: torch.Tensor) -> torch.Tensor:
+        """Convert dense binary format to sparse binary format.
+
+        Args:
+            input_data (torch.Tensor): The input data in dense format.
+
+        Returns:
+            torch.Tensor: The output data in sparse format.
+        """
+
+        return torch.where(input_data == 1, torch.tensor(1), torch.tensor(0))
+
+    def sparse_to_dense(self, input_data: torch.Tensor) -> torch.Tensor:
+        """Convert sparse binary format to dense binary format.
+
+        Args:
+            input_data (torch.Tensor): The input data in sparse format.
+
+        Returns:
+            torch.Tensor: The output data in dense format.
+        """
+
+        return torch.where(input_data == 1, torch.tensor(1), torch.tensor(-1))

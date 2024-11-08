@@ -35,9 +35,9 @@ class BHNetwork:
         self.hebbian_feedback.learn([btsp_output, input_data])
         return btsp_output
 
-    def reset_weights(self):
+    def reset_weights(self, new_btsp_weights=None):
         """Reset the weights."""
-        self.btsp_forward.reset_weights()
+        self.btsp_forward.reset_weights(new_btsp_weights)
         self.hebbian_feedback.reset_weights()
 
     def hebbian_feedback_nobinarize(self, input_data: torch.Tensor):
