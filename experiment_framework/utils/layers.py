@@ -211,11 +211,15 @@ class HebbianLayerParams:
     input_dim: int
     output_dim: int
     device: str
+    binary_sparse: bool = False # broken, keep false
 
 
 class HebbianLayer(LayerForward, LayerLearn, LayerWeightReset):
     """
     This is the class for the Hebbian feedback layer.
+    
+    TODO(Ruhao Tian): Fix the weight saturation issue of binary sparse weights.
+    ? Shall we add normalization to the weights?
     """
 
     def __init__(self, params: HebbianLayerParams) -> None:
@@ -225,6 +229,7 @@ class HebbianLayer(LayerForward, LayerLearn, LayerWeightReset):
         self.input_dim = params.input_dim
         self.output_dim = params.output_dim
         self.device = params.device
+        self.binary_sparse = params.binary_sparse
         # note the weights are stored in an transposed way
         self.weights = None
         self.weight_reset()
@@ -255,10 +260,19 @@ class HebbianLayer(LayerForward, LayerLearn, LayerWeightReset):
         )
 
         # calculate final hebbian weight change
-        hebbian_weight_change = hebbian_weight_change.sum(dim=0).bool()
+        hebbian_weight_change = hebbian_weight_change.sum(dim=0)
+        
+        if self.binary_sparse:
+            hebbian_weight_change = hebbian_weight_change.bool()
 
-        # update the weights
-        self.weights = torch.logical_or(self.weights, hebbian_weight_change)
+            # update the weights
+            self.weights = torch.logical_or(self.weights, hebbian_weight_change)
+            
+            return
+        else:
+            # update the weights
+            self.weights = self.weights + hebbian_weight_change
+            return
 
     def weight_reset(self, *args, **kwargs) -> None:
         """
@@ -266,7 +280,9 @@ class HebbianLayer(LayerForward, LayerLearn, LayerWeightReset):
         """
         self.weights = torch.zeros(
             self.input_dim, self.output_dim, device=self.device
-        ).bool()
+        ).float()
+        if self.binary_sparse:
+            self.weights = self.weights.bool()
 
 
 @dataclass
@@ -472,7 +488,7 @@ class PseudoinverseLayer(
                 self.output_dim, self.input_dim, device=self.device
             )
 
-    def learn(self, training_data: List) -> None:
+    def learn(self, training_data: List[torch.Tensor]) -> None:
         """Perform the learning pass.
 
         Args:
@@ -493,14 +509,16 @@ class PseudoinverseLayer(
 
             # update the weights
             self.weight_forward = torch.matmul(
-                presynaptic_data.float(), postsynaptic_data_pinv
+                presynaptic_data.transpose(0, 1).float(),
+                postsynaptic_data_pinv.transpose(0, 1),
             )
             self.weight_feedback = torch.matmul(
-                presynaptic_data_pinv, postsynaptic_data.float()
+                postsynaptic_data.transpose(0, 1).float(),
+                presynaptic_data_pinv.transpose(0, 1),
             )
-            # scale the weights
-            self.weight_forward = self.weight_forward / pattern_num
-            self.weight_feedback = self.weight_feedback / pattern_num
+        # scale the weights
+        self.weight_forward = self.weight_forward / pattern_num
+        self.weight_feedback = self.weight_feedback / pattern_num
 
     def learn_and_forward(self, training_data):
         """Perform the learning and forward pass.

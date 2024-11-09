@@ -7,7 +7,7 @@ by Sugandha Sharma, Sarthak Chandra, and Ila R. Fiete
 
 from dataclasses import dataclass
 import torch
-import custom_networks
+from custom_networks import btsp_step_topk
 from experiment_framework.utils import layers
 
 @dataclass
@@ -15,7 +15,7 @@ class BTSPMemoryScaffoldNetworkParams:
     """Parameters for BTSP memory scaffold network."""
     hebbian_forward: layers.HebbianLayerParams
     hebbian_topk: layers.TopKLayerParams
-    btsp_feedback: custom_networks.btsp_step_topk.BTSPStepTopKNetworkParams
+    btsp_feedback: btsp_step_topk.BTSPStepTopKNetworkParams
     
 class BTSPMemoryScaffoldNetwork:
     """BTSP memory scaffold network."""
@@ -25,10 +25,10 @@ class BTSPMemoryScaffoldNetwork:
         self.hebbian_forward = layers.HebbianLayer(params.hebbian_forward)
         self.hebbian_topk = layers.TopKLayer(params.hebbian_topk)
         self.hebbian_step = layers.StepLayer(layers.StepLayerParams(
-            threshold=0,
+            threshold=1e-5,
             )
         )
-        self.btsp_feedback = custom_networks.btsp_step_topk.BTSPStepTopKNetwork(
+        self.btsp_feedback = btsp_step_topk.BTSPStepTopKNetwork(
             params.btsp_feedback
         )
         self.reset_weights()
@@ -51,7 +51,7 @@ class BTSPMemoryScaffoldNetwork:
         hebbian_step_output = self.hebbian_step.forward(hebbian_topk_output)
         return self.btsp_feedback.forward(hebbian_step_output)
     
-    def pretrain_hebbian(self, input_data: torch.Tensor):
+    def pretrain_hebbian(self, input_data: list):
         """Pretrain the Hebbian layer."""
         self.hebbian_forward.learn(input_data)
     

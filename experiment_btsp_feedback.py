@@ -1,6 +1,7 @@
 """Initial test with new experiment framework.
 
 Intended to test the new experiment framework with the BTSPOnly network.
+TODO(Ruhao Tian): Refactor the parameterization with MetaParams.
 """
 
 import os
@@ -78,7 +79,7 @@ class BTSPOnlyExperiment(ExperimentInterface):
                     top_k=self.memory_topk,
                 ),
                 btsp_topk_step=layers.StepLayerParams(
-                    threshold=self.feedback_threshold,
+                    threshold=0,
                 ),
             ),
             hebbian_step_feedback=hebbian_step.HebbianStepNetworkParams(
@@ -129,6 +130,7 @@ class BTSPOnlyExperiment(ExperimentInterface):
         )
 
     def load_parameters(self):
+        """TODO(Ruhao Tian): Serious problem here. Refactor the parameterization."""
         return parameterization.recursive_iterate_dataclass(self.params)
 
     def load_dataset(self):

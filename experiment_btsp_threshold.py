@@ -29,10 +29,11 @@ class DatasetParams:
     memory_dim: int
     fp: float
 
+
 @dataclasses.dataclass
 class ResultInfo:
     """Result information.
-    
+
     Note: Must use pyarrow compatible types.
     """
 
@@ -42,13 +43,15 @@ class ResultInfo:
     grid_search_error_rate: pa.float64
     sparsity_based_optimal_threshold: pa.float64
     sparsity_based_error_rate: pa.float64
-    
+
+
 @dataclasses.dataclass
 class ExperimentParams:
     """Parameters for one specific experiment process."""
 
     network_params: b_h_network.BHNetworkParams
     dataset_params: DatasetParams
+
 
 class BTSPOnlyExperiment(ExperimentInterface):
     """BTSP only experiment.
@@ -59,9 +62,7 @@ class BTSPOnlyExperiment(ExperimentInterface):
     def __init__(self):
         """Constructor."""
 
-        self.memory_item = np.arange(
-            100, 25000, 500
-        ).tolist()  # number of memory items
+        self.memory_item = np.arange(100, 25000, 500).tolist()  # number of memory items
         # self.memory_item = [5, 10] # for testing
         self.memory_dim = 2500
         self.fp = np.linspace(
@@ -171,9 +172,9 @@ class BTSPOnlyExperiment(ExperimentInterface):
 
             # find the max element in the reconstructed_output
             max_reconstructed_output = torch.max(reconstructed_output)
-            
+
             # Method 1: grid search for the best feedback threshold
-            # grid search for the best feedback threshold           
+            # grid search for the best feedback threshold
             grid_search_ceiling = torch.maximum(
                 max_reconstructed_output, torch.tensor(1.0, device="cuda")
             )
@@ -198,22 +199,34 @@ class BTSPOnlyExperiment(ExperimentInterface):
                 * parameters.dataset_params.memory_dim
                 * parameters.dataset_params.fp
             )
-            
+            grid_search_error_rate = min(grid_search_error_rate, 1.0)
+
             # Method 2: sparsity based topk filter
-            activated_neuron = parameters.dataset_params.memory_item * parameters.dataset_params.memory_dim * parameters.dataset_params.fp
-            firing_set = torch.topk(reconstructed_output.flatten(), int(activated_neuron) + 1, largest=True)
-            min_firing_value = firing_set.values[-2]
-            max_resting_value = firing_set.values[-1]
-            sparsity_based_threshold = (min_firing_value + max_resting_value) / 2
-            
-            # calculate error rate
-            sparsity_based_reconstructed_output = reconstructed_output > sparsity_based_threshold
-            sparsity_based_error_rate = torch.sum(sparsity_based_reconstructed_output != dataset).item() / (
+            activated_neuron = (
                 parameters.dataset_params.memory_item
                 * parameters.dataset_params.memory_dim
                 * parameters.dataset_params.fp
             )
-            
+            firing_set = torch.topk(
+                reconstructed_output.flatten(), int(activated_neuron) + 1, largest=True
+            )
+            min_firing_value = firing_set.values[-2]
+            max_resting_value = firing_set.values[-1]
+            sparsity_based_threshold = (min_firing_value + max_resting_value) / 2
+
+            # calculate error rate
+            sparsity_based_reconstructed_output = (
+                reconstructed_output > sparsity_based_threshold
+            )
+            sparsity_based_error_rate = torch.sum(
+                sparsity_based_reconstructed_output != dataset
+            ).item() / (
+                parameters.dataset_params.memory_item
+                * parameters.dataset_params.memory_dim
+                * parameters.dataset_params.fp
+            )
+            sparsity_based_error_rate = min(sparsity_based_error_rate, 1.0)
+
             result = ResultInfo(
                 memory_items=parameters.dataset_params.memory_item,
                 fp=parameters.dataset_params.fp,
@@ -239,63 +252,115 @@ class BTSPOnlyExperiment(ExperimentInterface):
 def plot_error_difference(experiment_folder, result_name):
     """Plot the error difference between 2 approaches of setting the threshold."""
     # 1. load the data, load all columns
-    table = pq.read_table(
-        os.path.join(experiment_folder, result_name)
-    )
+    table = pq.read_table(os.path.join(experiment_folder, result_name))
 
     # 2. merge batch data
     # use mean as the merge function
     table = table.group_by(["memory_items", "fp"]).aggregate(
         [("grid_search_error_rate", "mean"), ("sparsity_based_error_rate", "mean")]
     )
+    # set error rate to 1 if it is larger than 1
+    table = table.set_column(
+        table.schema.get_field_index("grid_search_error_rate_mean"),
+        "grid_search_error_rate_mean",
+        pa.array(np.clip(table["grid_search_error_rate_mean"].to_numpy(), 0, 1)),
+    )
+    table = table.set_column(
+        table.schema.get_field_index("sparsity_based_error_rate_mean"),
+        "sparsity_based_error_rate_mean",
+        pa.array(np.clip(table["sparsity_based_error_rate_mean"].to_numpy(), 0, 1)),
+    )
 
     # 3. plot the 3D graph
     fig = plt.figure()
     # adjust figure size
-    fig.set_size_inches(18, 6)
+    fig.set_size_inches(12, 12)
+    gs = fig.add_gridspec(2,4)
     # set limits
     error_rate_min = 0
     error_rate_max = 1
 
     # 3.1 plot the grid search error rate
-    ax = fig.add_subplot(131, projection="3d")
+    ax_1 = fig.add_subplot(gs[0,:2], projection="3d")
     # get the data
     x = table["memory_items"].to_numpy()
     y = table["fp"].to_numpy()
     z = table["grid_search_error_rate_mean"].to_numpy()
     # plot the data
-    ax.plot_trisurf(x, y, z, cmap="coolwarm", edgecolor="none", vmin = error_rate_min, vmax = error_rate_max)
+    ax_1.plot_trisurf(
+        x,
+        y,
+        z,
+        cmap="coolwarm",
+        edgecolor="none",
+        vmin=error_rate_min,
+        vmax=error_rate_max,
+    )
+    ax_1.invert_xaxis()
     # set labels
-    ax.set_xlabel("Memory Items")
-    ax.set_ylabel("Sparsity")
-    ax.set_zlabel("Error Rate")
-    ax.set_title("Grid Search Error Rate")
+    ax_1.set_xlabel("Memory Items")
+    ax_1.set_ylabel("Sparsity")
+    ax_1.set_zlabel("Error Rate")
+    ax_1.set_title("Grid Search Error Rate")
     # set the color bar
-    
+
     # 3.2 plot the sparsity based error rate
-    ax = fig.add_subplot(132, projection="3d")
+    ax_2 = fig.add_subplot(gs[0,2:], projection="3d")
     # get the data
     x = table["memory_items"].to_numpy()
     y = table["fp"].to_numpy()
     z = table["sparsity_based_error_rate_mean"].to_numpy()
     # plot the data
-    ax.plot_trisurf(x, y, z, cmap="coolwarm", edgecolor="none", vmin = error_rate_min, vmax = error_rate_max)
+    ax_2.plot_trisurf(
+        x,
+        y,
+        z,
+        cmap="coolwarm",
+        edgecolor="none",
+        vmin=error_rate_min,
+        vmax=error_rate_max,
+    )
+    ax_2.invert_xaxis()
     # set labels
-    ax.set_xlabel("Memory Items")
-    ax.set_ylabel("Sparsity")
-    ax.set_zlabel("Error Rate")
-    ax.set_title("Sparsity Based Error Rate")
-    
+    ax_2.set_xlabel("Memory Items")
+    ax_2.set_ylabel("Sparsity")
+    ax_2.set_zlabel("Error Rate")
+    ax_2.set_title("Sparsity Based Error Rate")
+
     # 3.3 plot the error difference
-    ax = fig.add_subplot(133, projection="3d")
+    ax_3 = fig.add_subplot(gs[1,-3:-1], projection="3d")
     # get the data
     x = table["memory_items"].to_numpy()
     y = table["fp"].to_numpy()
-    z = table["sparsity_based_error_rate_mean"].to_numpy() - table["grid_search_error_rate_mean"].to_numpy()
+    z = (
+        table["sparsity_based_error_rate_mean"].to_numpy()
+        - table["grid_search_error_rate_mean"].to_numpy()
+    )
     # create a cmap, where PiYG with 0 as the center
-    norm = mpl.colors.TwoSlopeNorm(vcenter=0)
+    # use data min and max as boundaries
+    data_min = np.min(z)
+    data_max = np.max(z)
+    norm = mpl.colors.TwoSlopeNorm(vmin=data_min, vcenter=0, vmax=data_max)
     # plot the data
-    ax.plot_trisurf(x, y, z, cmap="PiYG", edgecolor="none", norm=norm)
+    ax_3.plot_trisurf(x, y, z, cmap="PiYG", edgecolor="none", norm=norm)
+    ax_3.invert_xaxis()
+    # set labels
+    ax_3.set_xlabel("Memory Items")
+    ax_3.set_ylabel("Sparsity")
+    ax_3.set_zlabel("Sparsity Based - Grid Search Error Rate")
+    ax_3.set_title("Error Rate Difference")
+
+    # add color bar, one for the difference and one for the error rate
+    # create a scalar mappable
+    sm = plt.cm.ScalarMappable(cmap="PiYG", norm=norm)
+    # add color bar for the difference
+    cbar = plt.colorbar(sm, ax=ax_3, pad=0.15)
+    cbar.set_label("Error Rate Difference")
+    # add color bar for the error rate
+    error_rate_norm = mpl.colors.Normalize(vmin=error_rate_min, vmax=error_rate_max)
+    error_rate_sm = plt.cm.ScalarMappable(cmap="coolwarm", norm=error_rate_norm)
+    cbar = plt.colorbar(error_rate_sm, ax=[ax_1, ax_2], pad=0.075)
+    cbar.set_label("Error Rate")
 
     # save the plot
     plt.savefig(
@@ -306,8 +371,8 @@ def plot_error_difference(experiment_folder, result_name):
 
 # main function
 if __name__ == "__main__":
-    experiment = SimpleBatchExperiment(BTSPOnlyExperiment(), REPEAT_NUM)
-    experiment.run()
-    experiment.evaluate()
-    # plot_memory_capacity("data/B-H_network_exp_20241103-160609", "results.parquet")
+    # experiment = SimpleBatchExperiment(BTSPOnlyExperiment(), REPEAT_NUM)
+    # experiment.run()
+    # experiment.evaluate()
+    plot_error_difference("data/B-H_threshold_exp_20241106-213527", "results.parquet")
     print("Experiment finished.")
