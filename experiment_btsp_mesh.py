@@ -105,14 +105,14 @@ class BTSPMeshExperiment(auto_experiment.ExperimentInterface):
         super().__init__()
 
         self.meta_params = MetaParams(
-            feature_dim=300,
-            hidden_dim=300,
+            feature_dim=200,
+            hidden_dim=200,
             label_dim=18,
             label_topk=3,
             btsp_fq=0.01,
             btsp_fw=1,
             btsp_topk=200,
-            pattern_num=np.arange(1, 800, 15).tolist(),
+            pattern_num=np.arange(1, 500, 15).tolist(),
             device="cuda",
         )
         
@@ -246,6 +246,17 @@ class BTSPMeshExperiment(auto_experiment.ExperimentInterface):
 
         # hidden_states = torch.sign(predefined_labels @ random_weights)
         hidden_states = torch.sign(torch.matmul(predefined_labels, random_weights))
+        
+        # debug: generate hidden states from a sparse random matrix
+        while True:
+            random_sparse = torch.rand(
+                parameters.dataset_params.pattern_num, parameters.dataset_params.hidden_dim,
+                device=parameters.dataset_params.device
+            ) < 0.01
+            random_dense = format_conversion.sparse_to_dense(random_sparse).float()
+            if torch.linalg.matrix_rank(random_dense) == parameters.dataset_params.pattern_num:
+                hidden_states = random_dense
+                break
         
         # # debug: implementation by MESH authors
         # m = parameters.dataset_params.label_topk

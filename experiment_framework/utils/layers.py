@@ -509,12 +509,12 @@ class PseudoinverseLayer(
 
             # update the weights
             self.weight_forward = torch.matmul(
-                postsynaptic_data,
+                postsynaptic_data[:, :pattern_num],
                 presynaptic_data_pinv,
             ).transpose(0, 1)
             self.weight_feedback = torch.matmul(
                 presynaptic_data,
-                postsynaptic_data_pinv,
+                postsynaptic_data_pinv[:pattern_num,:],
             ).transpose(0, 1)
         # scale the weights
         self.weight_forward = self.weight_forward / pattern_num

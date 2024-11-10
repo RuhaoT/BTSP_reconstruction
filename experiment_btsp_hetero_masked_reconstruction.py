@@ -5,6 +5,7 @@ BTSP-based networks on recalling a example dataset"""
 
 import os
 import dataclasses
+import tqdm
 import numpy as np
 import torch
 import torch.linalg
@@ -116,10 +117,7 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
             batch_size=2000,
         )
 
-        self.error_rates = []
-        self.pattern_nums = []
-        self.flip_ratios = []
-
+        self.candidate_hidden_states = None
     def load_parameters(self):
         """Load the parameters."""
         combinations: list[MetaParams] = parameterization.recursive_iterate_dataclass(
@@ -173,10 +171,34 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
 
     def load_dataset(self):
         """Not implemented"""
+        # find a list of hidden states that are full rank
+        # hidden states should be full rank
+        format_converter = layers.BinaryFormatConversionLayer()
+        candidate_hidden_states = []
+        progress = tqdm.tqdm(total=10)
+        print("Finding candidate hidden states")
+        while len(candidate_hidden_states) < 10:
+            hidden_states = (torch.rand(
+                size=[
+                    self.meta_params.hidden_dim,
+                    self.meta_params.hidden_dim,
+                ],
+                device=self.meta_params.device,
+            ) < self.meta_params.hidden_sparsity).to(self.meta_params.device)
+            dense_hidden_states = format_converter.sparse_to_dense(hidden_states.float())
+            if torch.linalg.matrix_rank(dense_hidden_states.float()) > 0.5*self.meta_params.hidden_dim:
+                candidate_hidden_states.append(hidden_states)
+                progress.update(1)
+        self.candidate_hidden_states = candidate_hidden_states
 
     def execute_experiment_process(self, parameters: ExperimentParams, dataset):
         """Execute the experiment process."""
         with torch.no_grad():
+            # prepare network
+            b_h_network_instance = b_h_network.BHNetwork(parameters.b_h_network)
+            hetero_learning_instance = layers.PseudoinverseLayer(parameters.hetero_learning)
+            format_converter = layers.BinaryFormatConversionLayer()
+
             # prepare data
             if parameters.use_random_dataset:
                 dataset = torch.sign(
@@ -205,23 +227,9 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
                 exit(1)
                 
             # prepare hidden states
-            # hidden states should be full rank
-            while True:
-                hidden_states = (torch.rand(
-                    size=[
-                        parameters.dataset_size,
-                        parameters.hidden_dim,
-                    ],
-                    device=parameters.device,
-                ) < parameters.hidden_sparsity).to(parameters.device)
-                if torch.linalg.matrix_rank(hidden_states.float()) == parameters.dataset_size:
-                    break
-
-            # prepare network
-            b_h_network_instance = b_h_network.BHNetwork(parameters.b_h_network)
-            hetero_learning_instance = layers.PseudoinverseLayer(parameters.hetero_learning)
-            format_converter = layers.BinaryFormatConversionLayer()
-
+            # pick a random hidden state
+            hidden_states = self.candidate_hidden_states[np.random.randint(0, 10)]
+            
             # train scaffold on hidden states
             # batch learning
             batches = torch.split(hidden_states, BATCH_SIZE)
