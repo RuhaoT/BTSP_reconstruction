@@ -230,7 +230,6 @@ class HebbianLayer(LayerForward, LayerLearn, LayerWeightReset):
         self.output_dim = params.output_dim
         self.device = params.device
         self.binary_sparse = params.binary_sparse
-        # note the weights are stored in an transposed way
         self.weights = None
         self.weight_reset()
 
@@ -488,34 +487,35 @@ class PseudoinverseLayer(
                 self.output_dim, self.input_dim, device=self.device
             )
 
-    def learn(self, training_data: List[torch.Tensor]) -> None:
+    def learn(self, training_data: list[torch.Tensor, torch.Tensor, int]) -> None:
         """Perform the learning pass.
 
         Args:
-            training_data (List): The presynaptic and postsynaptic data,
-                both torch.Tensor. The first element of the list is the
-                presynaptic data, and the second element of the list is the
-                postsynaptic data.
+            training_data (List): The presynaptic, postsynaptic data, and the
+                number of patterns. The first element of the list is the
+                presynaptic data, the second element of the list is the
+                postsynaptic data, and the third element of the list is the
+                number of patterns.
         """
 
         with torch.no_grad():
             # calculate pseudo-inverse matrix
-            presynaptic_data = training_data[0]
-            postsynaptic_data = training_data[1]
-            pattern_num = presynaptic_data.shape[0]
+            presynaptic_data = training_data[0].transpose(0, 1).float()
+            postsynaptic_data = training_data[1].transpose(0, 1).float()
+            pattern_num = training_data[2]
 
-            presynaptic_data_pinv = torch.pinverse(presynaptic_data.float())
-            postsynaptic_data_pinv = torch.pinverse(postsynaptic_data.float())
+            presynaptic_data_pinv = torch.pinverse(presynaptic_data)
+            postsynaptic_data_pinv = torch.pinverse(postsynaptic_data)
 
             # update the weights
             self.weight_forward = torch.matmul(
-                presynaptic_data.transpose(0, 1).float(),
-                postsynaptic_data_pinv.transpose(0, 1),
-            )
+                postsynaptic_data,
+                presynaptic_data_pinv,
+            ).transpose(0, 1)
             self.weight_feedback = torch.matmul(
-                postsynaptic_data.transpose(0, 1).float(),
-                presynaptic_data_pinv.transpose(0, 1),
-            )
+                presynaptic_data,
+                postsynaptic_data_pinv,
+            ).transpose(0, 1)
         # scale the weights
         self.weight_forward = self.weight_forward / pattern_num
         self.weight_feedback = self.weight_feedback / pattern_num
@@ -553,7 +553,7 @@ class BinaryFormatConversionLayer:
             torch.Tensor: The output data in sparse format.
         """
 
-        return torch.where(input_data == 1, torch.tensor(1), torch.tensor(0))
+        return torch.where(input_data > 0, torch.tensor(1), torch.tensor(0))
 
     def sparse_to_dense(self, input_data: torch.Tensor) -> torch.Tensor:
         """Convert sparse binary format to dense binary format.
@@ -565,4 +565,4 @@ class BinaryFormatConversionLayer:
             torch.Tensor: The output data in dense format.
         """
 
-        return torch.where(input_data == 1, torch.tensor(1), torch.tensor(-1))
+        return torch.where(input_data > 0.5, torch.tensor(1), torch.tensor(-1))

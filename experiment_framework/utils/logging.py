@@ -10,7 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-def init_experiment_folder(data_folder: str, experiment_name: str = "data"):
+def init_experiment_folder(data_folder: str, experiment_name: str = "data", timed: bool = True) -> str:
     """This function initializes the experiment folder.
 
     Args:
@@ -22,12 +22,16 @@ def init_experiment_folder(data_folder: str, experiment_name: str = "data"):
         os.makedirs(data_folder)
 
     # create experiment folder
-    experiment_folder_name = experiment_name + "_" + time.strftime("%Y%m%d-%H%M%S")
+    if timed:
+        experiment_folder_name = experiment_name + "_" + time.strftime("%Y%m%d-%H%M%S")
+    else:
+        experiment_folder_name = experiment_name
     experiment_folder = os.path.join(data_folder, experiment_folder_name)
     if not os.path.exists(experiment_folder):
         os.makedirs(experiment_folder)
     else:
-        raise ValueError("Experiment folder already exists.")
+        # raise an warning if the folder already exists
+        print(f"Warning: {experiment_folder} already exists.")
 
     return experiment_folder
 
@@ -85,6 +89,10 @@ class ParquetTableRecorder:
 
     def _initialize_parquet_file(self):
         """Initializes the parquet file for writing with the given schema."""
+        # if file already exists, delete it and print a warning
+        if os.path.exists(self.filepath):
+            print(f"Warning: {self.filepath} already exists. Overwriting.")
+            os.remove(self.filepath)
         self.writer = pq.ParquetWriter(self.filepath, self.schema)
         self.recording = True
 

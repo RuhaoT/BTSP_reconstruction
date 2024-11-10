@@ -34,7 +34,7 @@ class HebbianStepNetwork:
         hebbian_output = self.forward_nobinarize(input_data)
         return self.hebbian_feedback_threshold.forward(hebbian_output)
 
-    def learn(self, input_data: torch.Tensor):
+    def learn(self, input_data: list):
         """Learn the input data."""
         self.hebbian.learn(input_data)
 
