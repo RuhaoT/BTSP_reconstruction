@@ -50,6 +50,7 @@ class MetaParams:
 
     # experiment parameters
     flip_ratio: float | list  # noise on each pattern
+    rank_tolerance: float | list  # rank tolerance for hidden states
 
     # device parameters
     device: str
@@ -69,6 +70,7 @@ class ExperimentParams:
     dataset_size: int
     hidden_sparsity: float
     flip_ratio: float
+    rank_tolerance: float
 
     device: str
 
@@ -79,6 +81,7 @@ class ResultInfo:
     error_rate: pa.float64
     pattern_num: pa.int64
     flip_ratio: pa.float64
+    rank_tolerance: pa.float64
 
 
 class BTSPMaskedReconstructionExperiment(ExperimentInterface):
@@ -100,6 +103,7 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
             np.arange(10, 200, 10).tolist(),
             0.01,
             np.linspace(0.0, 0.4, 10).tolist(),
+            [0.5, 0.4, 0.3, 0.2, 0.1, 0.05],
             "cuda",
         )
 
@@ -164,6 +168,7 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
                 combination.dataset_size,
                 combination.hidden_sparsity,
                 combination.flip_ratio,
+                combination.rank_tolerance,
                 combination.device,
             )
             experiment_params.append(experiment_param)
@@ -171,25 +176,34 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
 
     def load_dataset(self):
         """Not implemented"""
+        
+        # TODO(Ruhao Tian):require refactor, exit for now
+        exit()
         # find a list of hidden states that are full rank
         # hidden states should be full rank
         format_converter = layers.BinaryFormatConversionLayer()
-        candidate_hidden_states = []
-        progress = tqdm.tqdm(total=10)
+        if not isinstance(self.meta_params.rank_tolerance, list):
+            self.meta_params.rank_tolerance = [self.meta_params.rank_tolerance]
+        
         print("Finding candidate hidden states")
-        while len(candidate_hidden_states) < 10:
-            hidden_states = (torch.rand(
-                size=[
-                    self.meta_params.hidden_dim,
-                    self.meta_params.hidden_dim,
-                ],
-                device=self.meta_params.device,
-            ) < self.meta_params.hidden_sparsity).to(self.meta_params.device)
-            dense_hidden_states = format_converter.sparse_to_dense(hidden_states.float())
-            if torch.linalg.matrix_rank(dense_hidden_states.float()) > 0.5*self.meta_params.hidden_dim:
-                candidate_hidden_states.append(hidden_states)
-                progress.update(1)
-        self.candidate_hidden_states = candidate_hidden_states
+        progress = tqdm.tqdm(total=10 * len(self.meta_params.rank_tolerance))
+        for rank_tolerance in self.meta_params.rank_tolerance:
+            candidate_hidden_states = []
+            while len(candidate_hidden_states) < 10:
+                hidden_states = (torch.rand(
+                    size=[
+                        self.meta_params.hidden_dim,
+                        self.meta_params.hidden_dim,
+                    ],
+                    device=self.meta_params.device,
+                ) < self.meta_params.hidden_sparsity).to(self.meta_params.device)
+                dense_hidden_states = format_converter.sparse_to_dense(hidden_states.float())
+                if torch.linalg.matrix_rank(dense_hidden_states.float()) > (1 - rank_tolerance)*self.meta_params.hidden_dim:
+                    candidate_hidden_states.append(hidden_states.clone())
+                    progress.update(1)
+            # save the hidden states to file
+            saved_hidden_states = torch.stack(candidate_hidden_states)
+            torch.save(saved_hidden_states, os.path.join(self.experiment_folder, f"hidden_states_rt_{rank_tolerance}.pt"))
 
     def execute_experiment_process(self, parameters: ExperimentParams, dataset):
         """Execute the experiment process."""
@@ -227,8 +241,10 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
                 exit(1)
                 
             # prepare hidden states
+            # load the hidden states file with correct rank tolerance
+            hidden_states_file = torch.load(os.path.join(self.experiment_folder, f"hidden_states_rt_{parameters.rank_tolerance}.pt"))
             # pick a random hidden state
-            hidden_states = self.candidate_hidden_states[np.random.randint(0, 10)]
+            hidden_states = hidden_states_file[torch.randint(0, 10, (1,)).item()]
             
             # train scaffold on hidden states
             # batch learning
@@ -285,6 +301,7 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
                 [float(error_rate)],
                 [int(parameters.dataset_size)],
                 [float(actural_flip_ratio)],
+                [float(parameters.rank_tolerance)],
             )
             result = dataclasses.asdict(result)
             self.logger.record(result)
