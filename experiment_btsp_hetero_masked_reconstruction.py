@@ -103,7 +103,7 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
             np.arange(10, 200, 10).tolist(),
             0.01,
             np.linspace(0.0, 0.4, 10).tolist(),
-            [0.5, 0.4, 0.3, 0.2, 0.1, 0.05],
+            [0.5, 0.3, 0.2, 0.1, 0.05, 0.03, 0.02, 0.015, 0.01],
             "cuda",
         )
 
@@ -177,13 +177,10 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
     def load_dataset(self):
         """Not implemented"""
         
-        # TODO(Ruhao Tian):require refactor, exit for now
-        exit()
+
         # find a list of hidden states that are full rank
         # hidden states should be full rank
         format_converter = layers.BinaryFormatConversionLayer()
-        if not isinstance(self.meta_params.rank_tolerance, list):
-            self.meta_params.rank_tolerance = [self.meta_params.rank_tolerance]
         
         print("Finding candidate hidden states")
         progress = tqdm.tqdm(total=10 * len(self.meta_params.rank_tolerance))
@@ -313,7 +310,9 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
         # stop recording
         if self.logger.recording:
             self.logger.close()
-            
+
+        # TODO(Ruhao Tian):require refactor, exit for now
+        exit()
         # load results
         table = pq.read_table(os.path.join(self.experiment_folder, "results.parquet"))
         
