@@ -23,7 +23,7 @@ from custom_networks import b_h_network, hebbian_step, btsp_step_topk
 
 
 REPEAT_NUM = 1
-BATCH_SIZE = 35
+BATCH_SIZE = 75
 
 
 @dataclasses.dataclass
@@ -103,7 +103,7 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
             np.arange(10, 200, 10).tolist(),
             0.01,
             np.linspace(0.0, 0.4, 10).tolist(),
-            [0.5, 0.3, 0.2, 0.1, 0.05, 0.03, 0.02, 0.015, 0.01],
+            [0.5, 0.3, 0.2, 0.1, 0.05],
             "cuda",
         )
 
@@ -119,6 +119,7 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
             os.path.join(self.experiment_folder, "results.parquet"),
             log_schema,
             batch_size=2000,
+            overwrite=False,
         )
 
         self.candidate_hidden_states = None
@@ -176,7 +177,7 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
 
     def load_dataset(self):
         """Not implemented"""
-        
+        return 
 
         # find a list of hidden states that are full rank
         # hidden states should be full rank
@@ -311,30 +312,36 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
         if self.logger.recording:
             self.logger.close()
 
-        # TODO(Ruhao Tian):require refactor, exit for now
-        exit()
         # load results
         table = pq.read_table(os.path.join(self.experiment_folder, "results.parquet"))
         
         # use mean as the merge function
-        table = table.group_by(["pattern_num", "flip_ratio"]).aggregate(
+        table = table.group_by(["pattern_num", "flip_ratio", "rank_tolerance"]).aggregate(
         [("error_rate", "mean")]
         )
         
-        # plot error rate
-        x = np.array(table["pattern_num"])
-        y = np.array(table["flip_ratio"])
-        z = np.array(table["error_rate_mean"])
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection="3d")
-        ax.plot_trisurf(x, y, z, cmap="coolwarm", edgecolor="none")
-        ax.invert_xaxis()
-        ax.set_xlabel("Pattern number")
-        ax.set_ylabel("Flip ratio")
-        ax.set_zlabel("Error rate")
-        ax.set_title("Error rate of BTSP masked reconstruction")
-        # save the plot
-        plt.savefig(os.path.join(self.experiment_folder, "error_rate.svg"))
+        # for each rank tolerance, plot the error rate
+        # find all unique rank tolerances in the table
+        rank_tolerances = table["rank_tolerance"].unique().to_pandas().values
+        print(rank_tolerances)
+        for rank_tolerance in rank_tolerances:
+            rank_table = table.filter(
+                table.field("rank_tolerance") == rank_tolerance
+            )
+            # plot error rate
+            x = np.array(rank_table["pattern_num"])
+            y = np.array(rank_table["flip_ratio"])
+            z = np.array(rank_table["error_rate_mean"])
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection="3d")
+            ax.plot_trisurf(x, y, z, cmap="coolwarm", edgecolor="none")
+            ax.invert_xaxis()
+            ax.set_xlabel("Pattern number")
+            ax.set_ylabel("Flip ratio")
+            ax.set_zlabel("Error rate")
+            ax.set_title(f"Error rate of BTSP masked reconstruction with rank tolerance {rank_tolerance}")
+            # save the plot
+            plt.savefig(os.path.join(self.experiment_folder, f"error_rate_rt_{rank_tolerance}.svg"))
 
         return
 

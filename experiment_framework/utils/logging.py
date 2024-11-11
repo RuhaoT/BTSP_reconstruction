@@ -68,7 +68,7 @@ def save_dataclass_to_json(dataclass: dataclasses.dataclass, filepath: str, enco
 class ParquetTableRecorder:
     """This class is used to record experiment results in parquet format."""
 
-    def __init__(self, filepath: str, schema: pa.Schema, batch_size: int = 100):
+    def __init__(self, filepath: str, schema: pa.Schema, batch_size: int = 100, overwrite: bool = True):
         """
         Initializes a new parquet file for recording.
 
@@ -83,6 +83,7 @@ class ParquetTableRecorder:
         self.batch = []  # Temporary storage for the incoming records
         self.writer = None  # Parquet writer
         self.recording = False
+        self.overwrite = overwrite
 
         # Initialize a new parquet file
         self._initialize_parquet_file()
@@ -91,8 +92,21 @@ class ParquetTableRecorder:
         """Initializes the parquet file for writing with the given schema."""
         # if file already exists, delete it and print a warning
         if os.path.exists(self.filepath):
-            print(f"Warning: {self.filepath} already exists. Overwriting.")
-            os.remove(self.filepath)
+            print(f"Warning: {self.filepath} already exists.")
+            if self.overwrite:
+                print(f"Overwriting {self.filepath}")
+                os.remove(self.filepath)
+            else:
+                # check if the file is open
+                if self.writer:
+                    raise ValueError("The file is already open. Close the file before overwriting.")
+                
+                # check schema
+                existing_schema = pq.read_table(self.filepath).schema
+                if existing_schema != self.schema:
+                    raise ValueError("The schema of the existing file does not match the given schema.")
+                
+                print("Appending to the existing file.")
         self.writer = pq.ParquetWriter(self.filepath, self.schema)
         self.recording = True
 
