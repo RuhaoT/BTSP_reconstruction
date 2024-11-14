@@ -118,6 +118,8 @@ class StepLayerParams:
 class StepLayer(LayerForward):
     """
     This is the class for the step layer.
+    
+    TODO(Ruhao Tian): make this layer type independent.
     """
 
     def __init__(self, params: StepLayerParams) -> None:
@@ -211,13 +213,13 @@ class HebbianLayerParams:
     input_dim: int
     output_dim: int
     device: str
-    binary_sparse: bool = False # broken, keep false
+    binary_sparse: bool = False  # broken, keep false
 
 
 class HebbianLayer(LayerForward, LayerLearn, LayerWeightReset):
     """
     This is the class for the Hebbian feedback layer.
-    
+
     TODO(Ruhao Tian): Fix the weight saturation issue of binary sparse weights.
     ? Shall we add normalization to the weights?
     """
@@ -260,13 +262,13 @@ class HebbianLayer(LayerForward, LayerLearn, LayerWeightReset):
 
         # calculate final hebbian weight change
         hebbian_weight_change = hebbian_weight_change.sum(dim=0)
-        
+
         if self.binary_sparse:
             hebbian_weight_change = hebbian_weight_change.bool()
 
             # update the weights
             self.weights = torch.logical_or(self.weights, hebbian_weight_change)
-            
+
             return
         else:
             # update the weights
@@ -397,17 +399,18 @@ class BTSPLayer(LayerForward, LayerLearn, LayerLearnForward, LayerWeightReset):
 
     def weight_reset(self, *args, **kwargs) -> None:
         """Reset the weights."""
-        self.weights = torch.zeros(
-            (self.input_dim, self.memory_neurons), device=self.device
+        self.weights = (
+            torch.rand(self.input_dim, self.memory_neurons, device=self.device)
+            < self.fq
         ).bool()
         if "weight" in kwargs:
             if kwargs["weight"] is not None:
                 self.weights = kwargs["weight"]
-        else:
-            self.connection_matrix = (
-                torch.rand((self.input_dim, self.memory_neurons), device=self.device)
-                < self.fw
-            ).bool()
+        self.connection_matrix = (
+            torch.rand((self.input_dim, self.memory_neurons), device=self.device)
+            < self.fw
+        ).bool()
+        return
 
 
 @dataclass
@@ -514,7 +517,7 @@ class PseudoinverseLayer(
             ).transpose(0, 1)
             self.weight_feedback = torch.matmul(
                 presynaptic_data,
-                postsynaptic_data_pinv[:pattern_num,:],
+                postsynaptic_data_pinv[:pattern_num, :],
             ).transpose(0, 1)
         # scale the weights
         self.weight_forward = self.weight_forward / pattern_num

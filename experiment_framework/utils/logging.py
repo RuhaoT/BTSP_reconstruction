@@ -2,6 +2,7 @@
 
 """
 
+import types
 import os
 import time
 import dataclasses
@@ -10,7 +11,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-def init_experiment_folder(data_folder: str, experiment_name: str = "data", timed: bool = True) -> str:
+def init_experiment_folder(
+    data_folder: str, experiment_name: str = "data", timed: bool = True
+) -> str:
     """This function initializes the experiment folder.
 
     Args:
@@ -35,6 +38,7 @@ def init_experiment_folder(data_folder: str, experiment_name: str = "data", time
 
     return experiment_folder
 
+# TODO(Ruhao Tian): find a better way to convert dataclass to pyarrow schema
 def dataclass_to_pyarrow_schema(dataclass: dataclasses.dataclass) -> pa.Schema:
     """Converts a dataclass to a pyarrow schema.
 
@@ -52,7 +56,10 @@ def dataclass_to_pyarrow_schema(dataclass: dataclasses.dataclass) -> pa.Schema:
         pa_fields.append(pa_field)
     return pa.schema(pa_fields)
 
-def save_dataclass_to_json(dataclass: dataclasses.dataclass, filepath: str, encoding: str = "utf-8"):
+
+def save_dataclass_to_json(
+    dataclass: dataclasses.dataclass, filepath: str, encoding: str = "utf-8"
+):
     """Saves a dataclass to a json file.
 
     Args:
@@ -62,13 +69,30 @@ def save_dataclass_to_json(dataclass: dataclasses.dataclass, filepath: str, enco
     data = dataclasses.asdict(dataclass)
     with open(filepath, "w", encoding=encoding) as f:
         json.dump(data, f)
+        
+def dict_elements_to_tuple(d: dict) -> dict:
+    """Converts all elements in a dictionary to tuples.
+
+    Args:
+        d (dict): The dictionary to convert.
+
+    Returns:
+        dict: The dictionary with all elements converted to tuples.
+    """
+    return {k: [v,] for k, v in d.items()}
 
 
 # Rewriting the class again with the necessary imports
 class ParquetTableRecorder:
     """This class is used to record experiment results in parquet format."""
 
-    def __init__(self, filepath: str, schema: pa.Schema, batch_size: int = 100, overwrite: bool = True):
+    def __init__(
+        self,
+        filepath: str,
+        schema: pa.Schema,
+        batch_size: int = 100,
+        overwrite: bool = True,
+    ):
         """
         Initializes a new parquet file for recording.
 
@@ -99,15 +123,21 @@ class ParquetTableRecorder:
             else:
                 # check if the file is open
                 if self.writer:
-                    raise ValueError("The file is already open. Close the file before overwriting.")
-                
+                    raise ValueError(
+                        "The file is already open. Close the file before overwriting."
+                    )
+
+                # read the existing file and check schema
+                existing_table = pq.read_table(self.filepath)
+
                 # check schema
-                existing_schema = pq.read_table(self.filepath).schema
+                existing_schema = existing_table.schema
                 if existing_schema != self.schema:
-                    raise ValueError("The schema of the existing file does not match the given schema.")
-                
+                    raise ValueError(
+                        "The schema of the existing file does not match the given schema."
+                    )
+
                 print("Appending to the existing file.")
-        self.writer = pq.ParquetWriter(self.filepath, self.schema)
         self.recording = True
 
     def record(self, record_data: dict):
@@ -119,7 +149,7 @@ class ParquetTableRecorder:
         """
         # Convert the record data to a pyarrow table
         table = pa.Table.from_pydict(record_data, schema=self.schema)
-
+        
         # Add new data to the current batch
         self.batch.append(table)
 
@@ -132,13 +162,11 @@ class ParquetTableRecorder:
         """Writes the current batch of data to the parquet file."""
         # Concatenate all tables in the batch and write to parquet
         combined_batch = pa.concat_tables(self.batch)
-        self.writer.write_table(combined_batch)
+        pq.write_table(combined_batch, self.filepath)
         print(f"Batch written to {self.filepath}")
 
     def close(self):
         """Finalizes the parquet file by writing any remaining data and closing the file."""
         if self.batch:
             self._write_batch()  # Write any remaining records
-        if self.writer:
-            self.writer.close()
-            self.recording = False
+        self.recording = False

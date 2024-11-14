@@ -1,7 +1,6 @@
 """Initial test with new experiment framework.
 
 Intended to test the new experiment framework with the BTSPOnly network.
-TODO(Ruhao Tian): Refactor the parameterization with MetaParams.
 """
 
 import os
@@ -23,6 +22,22 @@ from custom_networks import b_h_network, hebbian_step, btsp_step_topk
 REPEAT_NUM = 1
 BATCH_SIZE = 30
 
+@dataclasses.dataclass
+class MetaParams:
+    """Meta parameters for the experiment."""
+
+    pattern_num: int | list
+    pattern_dim: int | list
+    pattern_fp: float | list
+    btsp_fq: float | list
+    btsp_fw: float | list
+    output_dim: int | list
+    btsp_topk: int | list
+    feedback_threshold: float | list
+    experiment_name: str | list
+    data_folder: str | list
+    result_name: str | list
+    device: str | list
 
 @dataclasses.dataclass
 class DatasetParams:
@@ -39,6 +54,18 @@ class ExperimentParams:
 
     network_params: b_h_network.BHNetworkParams
     dataset_params: DatasetParams
+    
+@dataclasses.dataclass
+class ResultInfo:
+    """Result information for the experiment."""
+
+    memory_items: pa.int64
+    fq: pa.float64
+    fp: pa.float64
+    mse: pa.float64
+    optimal_threshold: pa.float64
+    accuracy: pa.float64
+    topk: pa.int64
 
 
 class BTSPOnlyExperiment(ExperimentInterface):
@@ -49,92 +76,80 @@ class BTSPOnlyExperiment(ExperimentInterface):
 
     def __init__(self):
         """Constructor."""
-
-        self.memory_item = np.arange(
-            2000, 40000, 5000
-        ).tolist()  # number of memory items
-        # self.memory_item = 200
-        self.memory_dim = 2500
-        self.fp = np.linspace(
-            0.0005, 0.1, 10
-        ).tolist()  # sparseness of the EACH memory item, fix to 0.01
-        # self.fp = 0.01
-        self.fw = 1  # sparseness of the weight matrix
-        # self.fq = np.linspace(0.001, 0.01, 10).tolist()
-        # 保证3-5neuro激活的基础上越小越好，0.0005/0.001 comparison
-        self.fq = [0.001, 0.0005]
-        self.output_dim = 3900
-        self.memory_topk = 15
-        self.feedback_threshold = 0  # threshold for the memory neuron to fire
-        self.params_network = b_h_network.BHNetworkParams(
-            btsp_step_topk_forward=btsp_step_topk.BTSPStepTopKNetworkParams(
-                btsp=layers.BTSPLayerParams(
-                    input_dim=self.memory_dim,
-                    memory_neurons=self.output_dim,
-                    fq=self.fq,
-                    fw=self.fw,
-                    device="cuda",
-                ),
-                btsp_topk=layers.TopKLayerParams(
-                    top_k=self.memory_topk,
-                ),
-                btsp_topk_step=layers.StepLayerParams(
-                    threshold=0,
-                ),
-            ),
-            hebbian_step_feedback=hebbian_step.HebbianStepNetworkParams(
-                hebbian=layers.HebbianLayerParams(
-                    input_dim=self.output_dim,  # Note this is a feedback layer
-                    output_dim=self.memory_dim,
-                    device="cuda",
-                ),
-                hebbian_feedback_threshold=layers.StepLayerParams(
-                    threshold=self.feedback_threshold,
-                ),
-            ),
-        )
-        self.params_dataset = DatasetParams(
-            memory_item=self.memory_item,
-            memory_dim=self.memory_dim,
-            fp=self.fp,
-        )
-        self.params = ExperimentParams(
-            network_params=self.params_network,
-            dataset_params=self.params_dataset,
+        
+        self.meta_params = MetaParams(
+            pattern_num=[1,2,3],
+            pattern_dim=2500,
+            pattern_fp=[0.1,0.2,0.3],
+            btsp_fq=[0.001,0.002,0.003],
+            btsp_fw=1,
+            output_dim=3900,
+            btsp_topk=15,
+            feedback_threshold=0,
+            experiment_name="B-H_network_refactor_test",
+            data_folder="data",
+            result_name="results.parquet",
+            device="cuda",
         )
 
         # data recording
-        self.experiment_name = "B-H_network_exp"
-        self.data_folder = "data"
-        self.result_name = "results.parquet"
-
         self.experiment_folder = logging.init_experiment_folder(
-            self.data_folder, self.experiment_name
+            self.meta_params.data_folder, self.meta_params.experiment_name, timed=False
         )
-
-        self.result_template = {
-            "fq": pa.float64(),
-            "fp": pa.float64(),
-            "Memory Items": pa.int64(),
-            "MSE": pa.int64(),
-            "Optimal threshold": pa.float64(),
-            "Accuracy": pa.float64(),
-            "Topk": pa.int64(),
-        }
-        self.result_schema = pa.schema(self.result_template)
+        
+        self.result_schema = logging.dataclass_to_pyarrow_schema(ResultInfo)
 
         self.data_recorder = logging.ParquetTableRecorder(
-            os.path.join(self.experiment_folder, self.result_name),
+            os.path.join(self.experiment_folder, self.meta_params.result_name),
             self.result_schema,
             500,
+            True,
         )
 
     def load_parameters(self):
-        """TODO(Ruhao Tian): Serious problem here. Refactor the parameterization."""
-        return parameterization.recursive_iterate_dataclass(self.params)
-
+        """Load the parameters for the experiment."""
+        meta_combinations: list[MetaParams] = parameterization.recursive_iterate_dataclass(self.meta_params)
+        experiment_params: list[ExperimentParams] = []
+        for meta_combination in meta_combinations:
+            experiment_param = ExperimentParams(
+                network_params=b_h_network.BHNetworkParams(
+                    btsp_step_topk_forward=btsp_step_topk.BTSPStepTopKNetworkParams(
+                        btsp=layers.BTSPLayerParams(
+                            input_dim=meta_combination.pattern_dim,
+                            memory_neurons=meta_combination.output_dim,
+                            fq=meta_combination.btsp_fq,
+                            fw=meta_combination.btsp_fw,
+                            device=meta_combination.device,
+                        ),
+                        btsp_topk=layers.TopKLayerParams(
+                            top_k=meta_combination.btsp_topk,
+                        ),
+                        btsp_topk_step=layers.StepLayerParams(
+                            threshold=1e-6,
+                        )
+                    ),
+                    hebbian_step_feedback=hebbian_step.HebbianStepNetworkParams(
+                        hebbian=layers.HebbianLayerParams(
+                            input_dim=meta_combination.output_dim, # Note this is a feedback layer
+                            output_dim=meta_combination.pattern_dim,
+                            device=meta_combination.device,
+                        ),
+                        hebbian_feedback_threshold=layers.StepLayerParams(
+                            threshold=meta_combination.feedback_threshold,
+                        )
+                    ),
+                ),
+                dataset_params=DatasetParams(
+                    memory_item=meta_combination.pattern_num,
+                    memory_dim=meta_combination.pattern_dim,
+                    fp=meta_combination.pattern_fp,
+                ),
+            )
+            experiment_params.append(experiment_param)
+        return experiment_params
+    
     def load_dataset(self):
-        return None
+        """No need to load dataset for this experiment."""
 
     def execute_experiment_process(self, parameters: ExperimentParams, dataset):
         with torch.no_grad():
@@ -151,16 +166,9 @@ class BTSPOnlyExperiment(ExperimentInterface):
             network = b_h_network.BHNetwork(parameters.network_params)
             # learning phase
             # batch learning
-            batch_size = min(BATCH_SIZE, parameters.dataset_params.memory_item)
-            for batch in range(0, parameters.dataset_params.memory_item, batch_size):
-                network.learn_and_forward(
-                    dataset[
-                        batch : min(
-                            batch + batch_size,
-                            parameters.dataset_params.memory_item,
-                        )
-                    ]
-                )
+            for batch in torch.split(dataset, BATCH_SIZE):
+                network.learn_and_forward(batch)
+
             # testing phase
             forward_output = network.forward(dataset)
             reconstructed_output = network.hebbian_feedback_nobinarize(forward_output)
@@ -199,18 +207,16 @@ class BTSPOnlyExperiment(ExperimentInterface):
                 ),
                 0,
             )
-            result = {
-                "Memory Items": [parameters.dataset_params.memory_item],
-                "fq": [parameters.network_params.btsp_step_topk_forward.btsp.fq],
-                "fp": [parameters.dataset_params.fp],
-                "MSE": [min_difference],
-                "Optimal threshold": [best_threshold],
-                "Accuracy": [accuracy],
-                "Topk": [
-                    parameters.network_params.btsp_step_topk_forward.btsp_topk.top_k
-                ],
-            }
-            self.data_recorder.record(result)
+            result = ResultInfo(
+                memory_items=[parameters.dataset_params.memory_item],
+                fq=[parameters.network_params.btsp_step_topk_forward.btsp.fq],
+                fp=[parameters.dataset_params.fp],
+                mse=[min_difference],
+                optimal_threshold=[best_threshold],
+                accuracy=[accuracy],
+                topk=[parameters.network_params.btsp_step_topk_forward.btsp_topk.top_k],
+            )
+            self.data_recorder.record(dataclasses.asdict(result))
             return result
 
     def summarize_results(self):
@@ -219,7 +225,7 @@ class BTSPOnlyExperiment(ExperimentInterface):
             self.data_recorder.close()
 
         # plot the memory capacity
-        plot_memory_capacity(self.experiment_folder, self.result_name)
+        plot_memory_capacity(self.experiment_folder, self.meta_params.result_name)
 
 
 def plot_memory_capacity(experiment_folder, result_name):
@@ -228,14 +234,14 @@ def plot_memory_capacity(experiment_folder, result_name):
     # 1. load the data
     table = pq.read_table(
         os.path.join(experiment_folder, result_name),
-        columns=["Memory Items", "fq", "fp", "Topk", "Accuracy"],
+        columns=["memory_items", "fq", "fp", "topk", "accuracy"],
     )
 
     # 2. merge batch data
     # if the memory items, fp, fq and topk are the same, merge the accuracy
     # use mean as the merge function
-    table = table.group_by(["Memory Items", "fq", "fp", "Topk"]).aggregate(
-        [("Accuracy", "mean")]
+    table = table.group_by(["memory_items", "fq", "fp", "topk"]).aggregate(
+        [("accuracy", "mean")]
     )
 
     # 3. plot the 3D graph
@@ -257,11 +263,11 @@ def plot_memory_capacity(experiment_folder, result_name):
         filtered_table = table.filter(table.column("fq") == fq)
         # generate subplot position
         ax = fig.add_subplot(subplot_rows, subplot_cols, index + 1, projection="3d")
-        accuracy = filtered_table.column("Accuracy_mean").to_numpy()
+        accuracy = filtered_table.column("accuracy_mean").to_numpy()
         error_rate = 1 - accuracy
         ax.plot_trisurf(
             filtered_table.column("fp").to_numpy(),
-            filtered_table.column("Memory Items").to_numpy(),
+            filtered_table.column("memory_items").to_numpy(),
             error_rate,
             cmap="coolwarm",
             edgecolor="none",

@@ -315,6 +315,9 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
         # load results
         table = pq.read_table(os.path.join(self.experiment_folder, "results.parquet"))
         
+        # debug: print the rank_tolerance
+        print(table.column("rank_tolerance").to_numpy())
+        
         # use mean as the merge function
         table = table.group_by(["pattern_num", "flip_ratio", "rank_tolerance"]).aggregate(
         [("error_rate", "mean")]
@@ -322,11 +325,12 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
         
         # for each rank tolerance, plot the error rate
         # find all unique rank tolerances in the table
-        rank_tolerances = table["rank_tolerance"].unique().to_pandas().values
+        rank_tolerances = table["rank_tolerance"].to_numpy()
+        rank_tolerances = np.unique(rank_tolerances)
         print(rank_tolerances)
         for rank_tolerance in rank_tolerances:
             rank_table = table.filter(
-                table.field("rank_tolerance") == rank_tolerance
+                table.column("rank_tolerance") == rank_tolerance
             )
             # plot error rate
             x = np.array(rank_table["pattern_num"])
@@ -348,5 +352,5 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
 
 if __name__ == "__main__":
     experiment = SimpleBatchExperiment(BTSPMaskedReconstructionExperiment(), REPEAT_NUM)
-    experiment.run()
+    # experiment.run()
     experiment.evaluate()

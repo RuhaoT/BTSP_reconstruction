@@ -5,10 +5,11 @@ The first module is a Fly-hashing network, and the second layer is a BTSP networ
 An Hebbian feedback layer is added with an end-to-end approach.
 """
 
+import dataclasses
 import torch
 from custom_networks import fly_hashing_step_topk, btsp_step_topk, hebbian_step
 
-
+@dataclasses.dataclass
 class FBHNetworkParams:
     """Params for FB-H network"""
 
@@ -37,6 +38,7 @@ class FBHNetwork:
         """Feedback pass without setting firing threshold"""
         return self.hebbian_feedback.forward_nobinarize(input_data)
 
+    # TODO(Ruhao Tian): Refine the name 'reconstruct' as normally it involves both forward and feedback pass
     def reconstruct(self, input_data: torch.Tensor) -> torch.Tensor:
         """feedback pass"""
         return self.hebbian_feedback.forward(input_data)

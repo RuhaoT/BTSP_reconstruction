@@ -1,6 +1,7 @@
 """Initial test with new experiment framework.
 
 Intended to test the new experiment framework with the BTSPOnly network.
+TODO(Ruhao Tian): Refactor the parameterization with MetaParams.
 """
 
 import os
