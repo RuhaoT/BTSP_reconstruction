@@ -150,7 +150,7 @@ class FBHMinimalDatasetExp(ExperimentInterface):
         self.data_recorder = logging.ParquetTableRecorder(
             os.path.join(self.experiment_folder, self.metadata_file_name),
             self.data_schema,
-            5000,
+            30000,
             True,
             "snappy",
         )
@@ -270,7 +270,7 @@ class FBHMinimalDatasetExp(ExperimentInterface):
             self.data_recorder.record(
                 logging.dict_elements_to_tuple(dataclasses.asdict(meta_combination))
             )
-            progess_bar.update(index + 1)
+            progess_bar.update(1)
 
         if self.data_recorder.recording:
             self.data_recorder.close()
