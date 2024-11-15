@@ -126,7 +126,7 @@ class BTSPOnlyExperiment(ExperimentInterface):
             self.params, os.path.join(self.experiment_folder, self.params_name)
         )
 
-        self.result_template = logging.dataclass_to_pyarrow_schema(ResultInfo)
+        self.result_template = logging.pyarrow_dataclass_to_schema(ResultInfo)
         self.result_schema = pa.schema(self.result_template)
 
         self.data_recorder = logging.ParquetTableRecorder(

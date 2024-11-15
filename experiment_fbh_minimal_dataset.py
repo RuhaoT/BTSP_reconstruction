@@ -7,8 +7,8 @@ import numpy as np
 import torch
 import pyarrow as pa
 from pyarrow import parquet as pq
+from tqdm import tqdm
 import pandas as pd
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 from experiment_framework.auto_experiment.auto_experiment import (
     SimpleBatchExperiment,
@@ -25,7 +25,7 @@ from dataset import s3dataset
 
 # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 REPEAT_NUM = 1
-BATCH_SIZE = 30
+BATCH_SIZE = 100
 
 
 @dataclasses.dataclass
@@ -54,10 +54,11 @@ class MetaParams:
     # experiment parameters
     mask_type: str | list = "none"
     mask_ratio: float | list = 0.0
-    experiment_name: str | list = "none"
     data_folder: str | list = "none"
-    result_name: str | list = "none"
     device: str | list = "none"
+
+    # metaparams id
+    metaparams_id: int = -1
 
 
 @dataclasses.dataclass
@@ -70,6 +71,8 @@ class DatasetParams:
     coordinate_precision: int
     color_precision: int
     device: str
+    mask_type: str
+    mask_ratio: float
 
 
 @dataclasses.dataclass
@@ -79,15 +82,17 @@ class ExperimentParams:
     # network_params: b_h_network.BHNetworkParams
     network_params: fb_h_network.FBHNetworkParams
     dataset_params: DatasetParams
+    experiment_index: int = -1
 
 
 @dataclasses.dataclass
 class ResultInfo:
     """Result information for the experiment."""
 
-    optimal_threshold: float = 0.0
-    difference_ratio: float = 0.0
-
+    optimal_threshold: pa.float64
+    difference_ratio: pa.float64
+    reconstructed_output: pa.binary
+    experiment_index: pa.int64
 
 
 class FBHMinimalDatasetExp(ExperimentInterface):
@@ -107,56 +112,62 @@ class FBHMinimalDatasetExp(ExperimentInterface):
             pattern_fp=0,
             sparse_representation_dim=12500,
             btsp_fq=np.linspace(0.001, 0.01, 10).tolist(),
+            # btsp_fq=0.001,
             btsp_fw=1,
             output_dim=19500,
             btsp_topk=np.arange(1, 201, 10).tolist(),
+            # btsp_topk=10,
             feedback_threshold=0,
             fly_hashing_sparsity=np.linspace(0.01, 0.1, 10).tolist(),
+            # fly_hashing_sparsity=0.01,
             fly_hashing_topk=np.arange(1, 21, 1).tolist(),
+            # fly_hashing_topk=1,
             fly_hashing_topk_step=1e-6,
-            mask_type="none",
-            mask_ratio=0,
-            experiment_name="FBH_network_minimal_dataset_exp",
+            mask_type=["colors", "coordinates", "full", "none"],
+            mask_ratio=np.linspace(0.0, 0.9, 10).tolist(),
             data_folder="data",
-            result_name="results.parquet",
             device="cuda",
         )
 
+        self.experiment_name = "FBH_network_minimal_dataset_exp"
+        self.metadata_file_name = "metadatas.parquet"
+        self.result_file_name = "results.parquet"
+
         # data recording
         self.experiment_folder = logging.init_experiment_folder(
-            self.meta_params.data_folder, self.meta_params.experiment_name, timed=False
+            self.meta_params.data_folder, self.experiment_name, timed=False
         )
 
-        self.result_schema = pa.Table.from_pydict(
-            logging.dict_elements_to_tuple(dataclasses.asdict(ResultInfo()))
-        ).schema
-        
+        self.result_schema = logging.pyarrow_dataclass_to_schema(ResultInfo)
+
         self.data_schema = pa.Table.from_pydict(
             logging.dict_elements_to_tuple(dataclasses.asdict(MetaParams()))
         ).schema
-        
+
         # for debugging
-        # print(pa.unify_schemas([self.result_schema, self.data_schema]))
+        print(pa.unify_schemas([self.result_schema, self.data_schema]))
 
         self.data_recorder = logging.ParquetTableRecorder(
-            os.path.join(self.experiment_folder, self.meta_params.result_name),
+            os.path.join(self.experiment_folder, self.metadata_file_name),
             self.data_schema,
             5000,
             True,
+            "snappy",
         )
-        
+
         self.result_recorder = logging.ParquetTableRecorder(
-            os.path.join(self.experiment_folder, self.meta_params.result_name),
+            os.path.join(self.experiment_folder, self.result_file_name),
             self.result_schema,
-            5000,
-            False,
+            1000,
+            True,
+            "snappy",
         )
 
         self.dataset = None
 
         # for debugging
-        self.min_diff_ratio = 1
-        self.best_reconstructed_dataset = None
+        # self.min_diff_ratio = 1
+        # self.best_reconstructed_dataset = None
 
     def load_parameters(self):
         """Load the parameters for the experiment."""
@@ -164,7 +175,9 @@ class FBHMinimalDatasetExp(ExperimentInterface):
             parameterization.recursive_iterate_dataclass(self.meta_params)
         )
         experiment_params: list[ExperimentParams] = []
-        for meta_combination in meta_combinations:
+        progess_bar = tqdm(total=len(meta_combinations))
+        for index, meta_combination in enumerate(meta_combinations):
+            meta_combination.metaparams_id = index
             # network_params=b_h_network.BHNetworkParams(
             #     btsp_step_topk_forward=btsp_step_topk.BTSPStepTopKNetworkParams(
             #         btsp=layers.BTSPLayerParams(
@@ -246,13 +259,21 @@ class FBHMinimalDatasetExp(ExperimentInterface):
                     coordinate_precision=meta_combination.coordinate_precision,
                     color_precision=meta_combination.color_precision,
                     device=meta_combination.device,
+                    mask_type=meta_combination.mask_type,
+                    mask_ratio=meta_combination.mask_ratio,
                 ),
+                experiment_index=index,
             )
             experiment_params.append(experiment_param)
-            
-            # save the meta parameters
-            self.data_recorder.record(logging.dict_elements_to_tuple(dataclasses.asdict(meta_combination)))
 
+            # save the meta parameters
+            self.data_recorder.record(
+                logging.dict_elements_to_tuple(dataclasses.asdict(meta_combination))
+            )
+            progess_bar.update(index + 1)
+
+        if self.data_recorder.recording:
+            self.data_recorder.close()
         # for debugging
         # test = meta_combinations[0]
         # test_dict = dataclasses.asdict(test)
@@ -283,7 +304,7 @@ class FBHMinimalDatasetExp(ExperimentInterface):
                 dtype=torch.float32,
                 device=parameters.dataset_params.device,
             )
-            dataset_sparsity = self.dataset.calculate_sparsity()
+            # dataset_sparsity = self.dataset.calculate_sparsity()
 
             # train the network
             batches = torch.split(dataset_tensors, BATCH_SIZE)
@@ -291,44 +312,66 @@ class FBHMinimalDatasetExp(ExperimentInterface):
                 fb_h_network_instance.learn_and_forward(batch)
 
             # TODO(Ruhao Tian): add noise
+            self.dataset.set_mask(
+                parameters.dataset_params.mask_type,
+                parameters.dataset_params.mask_ratio,
+            )
+            masked_tensors = torch.tensor(
+                self.dataset.to_binary_tensors(masked=True),
+                dtype=torch.float32,
+                device=parameters.dataset_params.device,
+            )
 
             # test the network
-            forward_output = fb_h_network_instance.forward(dataset_tensors)
+            forward_output = fb_h_network_instance.forward(masked_tensors)
 
             feedback_output = fb_h_network_instance.feedback_nobinarize(forward_output)
             # use sparsity-based thresholding
             # TODO(Ruhao Tian): change to grid search when noise is added
-            activated_neurons = int(dataset_sparsity * dataset_tensors.numel())
-            top_elements = torch.topk(
-                feedback_output.flatten(), activated_neurons + 1, largest=True
-            )
-            min_firing_value = top_elements.values[-2]
-            max_resting_value = top_elements.values[-1]
-            threshold = (min_firing_value + max_resting_value) / 2
+            max_feedback = torch.max(feedback_output)
+            threshold_candidates = torch.linspace(0, max_feedback, 15)
+            min_difference = torch.tensor(float("inf"))
+            best_threshold = 0
+            for threshold in threshold_candidates:
+                reconstructed_output = torch.where(feedback_output > threshold, 1, 0)
+                difference = torch.sum(
+                    torch.abs(reconstructed_output - dataset_tensors)
+                )
+                if difference < min_difference:
+                    min_difference = difference
+                    best_threshold = threshold
 
-            reconstructed_output = torch.where(feedback_output > threshold, 1, 0)
+            reconstructed_output = torch.where(
+                feedback_output > best_threshold, True, False
+            )
             difference_ratio = (
-                torch.sum(torch.abs(reconstructed_output - dataset_tensors))
+                torch.sum(torch.abs(reconstructed_output.float() - dataset_tensors))
                 / dataset_tensors.numel()
             )
-            print(f"Threshold: {threshold}, Difference ratio: {difference_ratio}")
+            reconstructed_output_bin = (
+                reconstructed_output.cpu().numpy().flatten().tobytes()
+            )
 
             # save parameters and results
             result_info = ResultInfo(
-                optimal_threshold=float(threshold),
+                optimal_threshold=float(best_threshold),
                 difference_ratio=float(difference_ratio),
+                reconstructed_output=reconstructed_output_bin,
+                experiment_index=int(parameters.experiment_index),
             )
-            result_info_dict = logging.dict_elements_to_tuple(dataclasses.asdict(result_info))
-            
+            result_info_dict = logging.dict_elements_to_tuple(
+                dataclasses.asdict(result_info), ignore_iterable=True
+            )
+
             self.result_recorder.record(result_info_dict)
 
             # for debugging
-            if difference_ratio < self.min_diff_ratio:
-                self.min_diff_ratio = difference_ratio
-                self.best_reconstructed_dataset = s3dataset.MinimalBTSPDataset(
-                    self.dataset.coordinate_precision,
-                    self.dataset.color_precision,
-                ).from_binary_tensors(reconstructed_output.cpu().numpy())
+            # if difference_ratio < self.min_diff_ratio:
+            #     self.min_diff_ratio = difference_ratio
+            #     self.best_reconstructed_dataset = s3dataset.MinimalBTSPDataset(
+            #         self.dataset.coordinate_precision,
+            #         self.dataset.color_precision,
+            #     ).from_binary_tensors(reconstructed_output.cpu().numpy())
             return
 
     def summarize_results(self):
@@ -339,88 +382,87 @@ class FBHMinimalDatasetExp(ExperimentInterface):
             self.result_recorder.close()
 
         # for debugging
-        self.best_reconstructed_dataset.plot_dataset(
-            display=False,
-            save_as=self.experiment_folder + "/best_reconstructed_dataset.svg",
+        # self.best_reconstructed_dataset.plot_dataset(
+        #     display=False,
+        #     save_as=self.experiment_folder + "/best_reconstructed_dataset.svg",
+        # )
+
+        # load metaparams and results
+        metadatas = pq.read_table(
+            os.path.join(self.experiment_folder, self.metadata_file_name)
         )
-
-        # plot the memory capacity
-        # plot_memory_capacity(self.experiment_folder, self.meta_params.result_name)
-
-
-def plot_memory_capacity(experiment_folder, result_name):
-    """Plot the memory capacity of the B-H network."""
-    # 3D plot the memory capacity
-    # 1. load the data
-    table = pq.read_table(
-        os.path.join(experiment_folder, result_name),
-        columns=["memory_items", "fq", "fp", "topk", "accuracy"],
-    )
-
-    # 2. merge batch data
-    # if the memory items, fp, fq and topk are the same, merge the accuracy
-    # use mean as the merge function
-    table = table.group_by(["memory_items", "fq", "fp", "topk"]).aggregate(
-        [("accuracy", "mean")]
-    )
-
-    # 3. plot the 3D graph
-    fig = plt.figure()
-    # for each different fq, add a subplot
-    # find all different fq values
-    fq_values = table.column("fq").to_numpy()
-    unique_fq_values = np.unique(fq_values)
-    subplot_num = len(unique_fq_values)
-    subplot_cols = np.ceil(np.sqrt(subplot_num)).astype(int)
-    subplot_rows = np.ceil(subplot_num / subplot_cols).astype(int)
-    # adjust figure size based on the subplot number
-    fig.set_size_inches(6 * subplot_cols, 6 * subplot_rows)
-    vmin = 0
-    vmax = 1
-
-    for index, fq in enumerate(unique_fq_values):
-        # filter the table by topk
-        filtered_table = table.filter(table.column("fq") == fq)
-        # generate subplot position
-        ax = fig.add_subplot(subplot_rows, subplot_cols, index + 1, projection="3d")
-        accuracy = filtered_table.column("accuracy_mean").to_numpy()
-        error_rate = 1 - accuracy
-        ax.plot_trisurf(
-            filtered_table.column("fp").to_numpy(),
-            filtered_table.column("memory_items").to_numpy(),
-            error_rate,
-            cmap="coolwarm",
-            edgecolor="none",
-            vmin=vmin,
-            vmax=vmax,
+        results = pq.read_table(
+            os.path.join(self.experiment_folder, self.result_file_name)
         )
-        ax.set_title(f"fq = {fq}", y=1.0)
-        ax.set_xlabel("fp")
-        ax.set_ylabel("Memory Items")
-        ax.set_zlabel("Error Rate")
-        ax.invert_xaxis()
+        full_params = results.join(
+            metadatas, keys="experiment_index", right_keys="metaparams_id"
+        )
+        full_params = full_params.to_pandas()
 
-    plt.subplots_adjust(hspace=0.4)
+        # extract best result for each mask type and ratio
+        best_results = []
+        for mask_type in self.meta_params.mask_type:
+            for mask_ratio in self.meta_params.mask_ratio:
+                mask_results = full_params[
+                    (full_params["mask_type"] == mask_type)
+                    & (full_params["mask_ratio"] == mask_ratio)
+                ]
+                best_result = mask_results.loc[
+                    mask_results["difference_ratio"].idxmin()
+                ]
+                best_results.append(best_result)
 
-    # Add a color bar at the right side of the whole image
-    cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
-    norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
-    cbar = fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap="coolwarm"), cax=cbar_ax)
-    cbar.set_label("Error Rate")
-    # plt.show()
+        # for each mask type and ratio, plot the best result
+        for best_result in best_results:
+            result_pattern_length = (
+                best_result["coordinate_precision"] * 2
+                + best_result["color_precision"] * 3
+            )
+            reconstructed_output = (
+                np.frombuffer(best_result["reconstructed_output"], dtype=np.bool)
+                .astype(int)
+                .reshape(-1, result_pattern_length)
+            )
+            reconstructed_dataset = s3dataset.MinimalBTSPDataset(
+                best_result["coordinate_precision"],
+                best_result["color_precision"],
+            ).from_binary_tensors(reconstructed_output)
+            # start plotting
+            fig = plt.figure(figsize=(10, 5))
+            reconstructed_dataset.plot_dataset(figure=fig, subplot_index=121, display=False)
+            
+            ax = fig.add_subplot(122)
+            # turn off the axis
+            ax.axis("off")
+            ax.text(
+                0.5,
+                0.5,
+                (
+                    f"Mask type: {best_result['mask_type']}\n"
+                    f"Mask ratio: {best_result['mask_ratio']}\n"
+                    f"Difference ratio: {best_result['difference_ratio']}\n"
+                    f"Optimal threshold: {best_result['optimal_threshold']}\n"
+                    f"btsp topk: {best_result['btsp_topk']}\n"
+                    f"btsp fq: {best_result['btsp_fq']}\n"
+                    f"fly hashing sparsity: {best_result['fly_hashing_sparsity']}\n"
+                    f"fly hashing topk: {best_result['fly_hashing_topk']}\n"
+                ),
+                transform=ax.transAxes,
+                fontsize=12,
+                verticalalignment="center",
+                horizontalalignment="center",
+                bbox=dict(facecolor="white", alpha=0.5),
+            )
 
-    # Customize the axes labels
-    # ax.set(xlabel="fp", ylabel="Memory Items", zlabel="Error Rate")
-
-    # Customize the title and color bar
-    # ax.set_title("Memory Capacity for B-H Network")
-    # fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
-
-    # save the plot
-    plt.savefig(
-        os.path.join(experiment_folder, "memory_capacity_test.svg"),
-        transparent=True,
-    )
+            # save the figure
+            fig.savefig(
+                os.path.join(
+                    self.experiment_folder,
+                    f"mask_{best_result['mask_type']}_ratio_{best_result['mask_ratio']}.svg",
+                )
+            )
+            # close the figure
+            plt.close(fig)
 
 
 # main function
@@ -429,5 +471,4 @@ if __name__ == "__main__":
     experiment = SimpleBatchExperiment(FBHMinimalDatasetExp(), REPEAT_NUM)
     experiment.run()
     experiment.evaluate()
-    # plot_memory_capacity("data/B-H_network_exp_20241103-160609", "results.parquet")
     print("Experiment finished.")

@@ -113,7 +113,7 @@ class BTSPMaskedReconstructionExperiment(ExperimentInterface):
             self.meta_params.timed,
         )
         
-        log_schema = logging.dataclass_to_pyarrow_schema(ResultInfo)
+        log_schema = logging.pyarrow_dataclass_to_schema(ResultInfo)
         
         self.logger = logging.ParquetTableRecorder(
             os.path.join(self.experiment_folder, "results.parquet"),

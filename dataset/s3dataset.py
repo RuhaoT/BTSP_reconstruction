@@ -5,6 +5,7 @@ TODO(Ruhao Tian): Refactor this file with pyarrow.
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from scipy.interpolate import CubicSpline
 from PIL import Image
 import pyarrow as pa
@@ -14,14 +15,16 @@ import pyarrow.csv as pc
 class MinimalBTSPDataset:
     """A minimal multi-modal dataset for the BTSP project."""
 
-    def __init__(self, coordinate_precision=8, color_precision=8):
+    def __init__(self, coordinate_precision: int = 8, color_precision: int = 8):
         self.input_file = None
         self.precise_raw_data: pa.Table = None
         self.control_points_normalized = None
         self.coordinate_precision = coordinate_precision
         self.color_precision = color_precision
-        self.binary_tensors = None
+        self.binary_tensors: np.ndarray = None
+        self.binary_mask: np.ndarray = None
         self.file_schema = ["x", "y", "r", "g", "b"]
+        self.mask_types = ["coordinates", "colors", "full", "none"]
 
     def from_file(self, input_file: str):
         """Load the dataset from a CSV file."""
@@ -32,7 +35,7 @@ class MinimalBTSPDataset:
         if self.precise_raw_data.column_names != self.file_schema:
             raise ValueError(
                 (
-                    "Input file schema is incorrect. Expected:" 
+                    "Input file schema is incorrect. Expected:"
                     f"{self.file_schema}"
                     ", got:"
                     f"{self.precise_raw_data.columns.tolist()}"
@@ -102,6 +105,26 @@ class MinimalBTSPDataset:
         )
 
         return self
+    
+    def from_float_tensors(self, input_float_tensors: np.ndarray):
+        """Load the dataset from float tensors."""
+        if self.binary_tensors is not None or self.precise_raw_data is not None:
+            print("Warning: Overwriting existing dataset.")
+
+        # check the shape of the input binary tensors
+        correct_length = 5
+        if input_float_tensors.shape[1] != correct_length:
+            raise ValueError(
+                (
+                    "Input float tensors have incorrect shape. Expected:"
+                    f"{correct_length}, got:"
+                    f"{input_float_tensors.shape[1]}"
+                )
+            )
+
+        self.precise_raw_data = pa.Table.from_arrays(
+            input_float_tensors.T, names=self.file_schema
+        )
 
     def new_dataset(
         self,
@@ -173,7 +196,7 @@ class MinimalBTSPDataset:
         """Sample points from a Catmull-Rom spline defined by control points.
 
         Args:
-            spline_control_points: list | np.ndarray, each element is a 
+            spline_control_points: list | np.ndarray, each element is a
                 tuple of (x, y) coordinates of the control points.
             num_samples: int, number of points to sample from the spline.
         """
@@ -231,7 +254,7 @@ class MinimalBTSPDataset:
             sampled_texture_colors.append(color)
         return np.array(sampled_texture_colors)
 
-    def to_binary_tensors(self) -> np.ndarray:
+    def to_binary_tensors(self, masked: bool = False) -> np.ndarray:
         """Convert the dataset to binary tensors, with precision loss."""
         if self.precise_raw_data is None:
             raise ValueError("No dataset loaded.")
@@ -275,16 +298,21 @@ class MinimalBTSPDataset:
             binary_array = binary_array > 0
             self.binary_tensors = np.vstack((self.binary_tensors, binary_array))
 
+        if masked:
+            if self.binary_mask is None:
+                raise ValueError("No mask set.")
+            self.binary_tensors[self.binary_mask] = 0
+
         # print("Binary conversion finished")
 
         return self.binary_tensors
 
-    def to_float_tensors(self) -> np.ndarray:
+    def to_float_tensors(self, masked: bool = False) -> np.ndarray:
         """Convert the binary tensors back to float tensors, with precision loss."""
         result = np.empty((0, 5))
-        if self.binary_tensors is None:
-            self.to_binary_tensors()
-        for row in self.binary_tensors:
+        binary_tensors = self.to_binary_tensors(masked)
+        for row_index in range(binary_tensors.shape[0]):
+            row = binary_tensors[row_index]
             # print(row)
             x = int("".join(map(str, row[: self.coordinate_precision])), 2) / pow(
                 2, self.coordinate_precision - 1
@@ -341,7 +369,7 @@ class MinimalBTSPDataset:
             result = np.vstack((result, np.array([x, y, r, g, b])))
 
         # print a sample of the result
-        print(result[:5])
+        # print(result[:5])
         return result
 
     def to_raw_pa_table(self) -> pa.Table:
@@ -357,23 +385,27 @@ class MinimalBTSPDataset:
 
         return total_ones / total_elements
 
-    def plot_dataset(self, display: bool = True, save_as: str = None):
+    def plot_dataset(self, display: bool = True, save_as: str = None, figure: Figure = None, subplot_index: int = 111):
         """Plot the dataset."""
-        plt.figure()
-        # plot the sampled points
+        if figure is None:
+            figure = plt.figure()
+        ax = figure.add_subplot(subplot_index)
+
+        # Plot the sampled points
         x = self.precise_raw_data["x"].to_numpy()
         y = self.precise_raw_data["y"].to_numpy()
         color_r = self.precise_raw_data["r"].to_numpy() / 255
         color_g = self.precise_raw_data["g"].to_numpy() / 255
         color_b = self.precise_raw_data["b"].to_numpy() / 255
-        plt.scatter(x, y, c=np.vstack((color_r, color_g, color_b)).T)
-        # plot the control points
+        ax.scatter(x, y, c=np.vstack((color_r, color_g, color_b)).T)
+
+        # Plot the control points
         if self.control_points_normalized is None:
             print("No control points found. Skipping.")
         else:
             control_x = [point[0] for point in self.control_points_normalized]
             control_y = [point[1] for point in self.control_points_normalized]
-            plt.plot(
+            ax.plot(
                 control_x,
                 control_y,
                 "ro--",
@@ -385,6 +417,77 @@ class MinimalBTSPDataset:
 
         if display:
             plt.show()
+            
+
+    def _set_coordinates_mask(self, mask_ratio: float = 1.0):
+        """Mask the coordinates of the dataset."""
+
+        # mask the coordinates
+        # True means masked
+        mask = np.random.choice(
+            [False, True],
+            size=(self.binary_tensors.shape[0], self.coordinate_precision * 2),
+            p=[1 - mask_ratio, mask_ratio],
+        )
+        # extend the mask to match the dataset shape
+        # the extended part should be False
+        mask_extend = np.zeros(
+            (self.binary_tensors.shape[0], self.color_precision * 3), dtype=bool
+        )
+        # concatenate the mask
+        self.binary_mask = np.concatenate((mask, mask_extend), axis=1)
+
+    def _set_colors_mask(self, mask_ratio: float = 1.0):
+        """Mask the colors of the dataset."""
+
+        # mask the colors
+        # True means masked
+        mask = np.random.choice(
+            [False, True],
+            size=(self.binary_tensors.shape[0], self.color_precision * 3),
+            p=[1 - mask_ratio, mask_ratio],
+        )
+        # extend the mask to match the dataset shape
+        # the extended part should be False
+        mask_extend = np.zeros(
+            (self.binary_tensors.shape[0], self.coordinate_precision * 2), dtype=bool
+        )
+        # concatenate the mask
+        self.binary_mask = np.concatenate((mask_extend, mask), axis=1)
+
+    def _set_full_mask(self, mask_ratio: float = 1.0):
+        """Mask the full dataset."""
+
+        # mask the full dataset
+        # True means masked
+        self.binary_mask = np.random.choice(
+            [False, True],
+            size=(
+                self.binary_tensors.shape[0],
+                self.coordinate_precision * 2 + self.color_precision * 3,
+            ),
+            p=[1 - mask_ratio, mask_ratio],
+        )
+
+    def set_mask(self, mask_type: str, mask_ratio: float = 1.0):
+        """Set the mask for the dataset."""
+        # check the mask type
+        if mask_type not in self.mask_types:
+            raise ValueError(f"Mask type {mask_type} is not supported.")
+
+        # check binary tensors
+        if self.binary_tensors is None:
+            self.to_binary_tensors()
+
+        match mask_type:
+            case "coordinates":
+                self._set_coordinates_mask(mask_ratio)
+            case "colors":
+                self._set_colors_mask(mask_ratio)
+            case "full":
+                self._set_full_mask(mask_ratio)
+            case "none":
+                self.binary_mask = np.zeros(self.binary_tensors.shape, dtype=bool)
 
 
 if __name__ == "__main__":
@@ -398,7 +501,7 @@ if __name__ == "__main__":
     control_points = [(1, 1), (2, 3), (4, 4), (5, 1), (6, 3)]
 
     # Generate the dataset
-    example = MinimalBTSPDataset()
+    example = MinimalBTSPDataset(32, 8)
     example.new_dataset(
         "./image.png",
         control_points,
@@ -413,10 +516,13 @@ if __name__ == "__main__":
     print(dataset[:5])  # Print the first 5 rows of the dataset
 
     example.save_dataset("dataset.csv")
+    example.from_file("dataset.csv")
+    example.plot_dataset()
 
     # test binary conversion
-    binary_tensors = example.to_binary_tensors()
-    example_from_binary = MinimalBTSPDataset()
-    example_from_binary.from_binary_tensors(binary_tensors)
-    example.plot_dataset()
-    example_from_binary.plot_dataset()
+    for mask in example.mask_types:
+        example.set_mask(mask, 1)
+        tensors = example.to_float_tensors(masked=True)
+        example_from_tensors = MinimalBTSPDataset(32, 8)
+        example_from_tensors.from_float_tensors(tensors)
+        example_from_tensors.plot_dataset()

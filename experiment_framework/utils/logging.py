@@ -40,6 +40,24 @@ def init_experiment_folder(
 
 # TODO(Ruhao Tian): find a better way to convert dataclass to pyarrow schema
 def dataclass_to_pyarrow_schema(dataclass: dataclasses.dataclass) -> pa.Schema:
+    """Deprecated: Use the `pyarrow_dataclass_to_schema` function instead.
+    Converts a dataclass to a pyarrow schema.
+
+    Args:
+        dataclass (dataclass): The dataclass to convert.
+
+    Returns:
+        pa.Schema: The pyarrow schema.
+    """
+    pa_fields = []
+    for field in dataclasses.fields(dataclass):
+        field_name = field.name
+        field_type = field.type
+        pa_field = pa.field(field_name, field_type())
+        pa_fields.append(pa_field)
+    return pa.schema(pa_fields)
+
+def pyarrow_dataclass_to_schema(dataclass: dataclasses.dataclass) -> pa.Schema:
     """Converts a dataclass to a pyarrow schema.
 
     Args:
@@ -70,7 +88,7 @@ def save_dataclass_to_json(
     with open(filepath, "w", encoding=encoding) as f:
         json.dump(data, f)
         
-def dict_elements_to_tuple(d: dict) -> dict:
+def dict_elements_to_tuple(d: dict, ignore_iterable: bool = False) -> dict:
     """Converts all elements in a dictionary to tuples.
 
     Args:
@@ -79,6 +97,9 @@ def dict_elements_to_tuple(d: dict) -> dict:
     Returns:
         dict: The dictionary with all elements converted to tuples.
     """
+    if ignore_iterable:
+        # for the iterable values, keep them as they are
+        return {k: (v,) if not isinstance(v, (list, tuple)) else v for k, v in d.items()}
     return {k: [v,] for k, v in d.items()}
 
 
@@ -92,6 +113,7 @@ class ParquetTableRecorder:
         schema: pa.Schema,
         batch_size: int = 100,
         overwrite: bool = True,
+        compression: str | dict = 'none',
     ):
         """
         Initializes a new parquet file for recording.
@@ -108,6 +130,7 @@ class ParquetTableRecorder:
         self.writer = None  # Parquet writer
         self.recording = False
         self.overwrite = overwrite
+        self.compression = compression
 
         # Initialize a new parquet file
         self._initialize_parquet_file()
@@ -120,13 +143,15 @@ class ParquetTableRecorder:
             if self.overwrite:
                 print(f"Overwriting {self.filepath}")
                 os.remove(self.filepath)
+                self.writer = pq.ParquetWriter(
+                    self.filepath, self.schema, compression=self.compression
+                )
             else:
                 # check if the file is open
                 if self.writer:
                     raise ValueError(
                         "The file is already open. Close the file before overwriting."
                     )
-
                 # read the existing file and check schema
                 existing_table = pq.read_table(self.filepath)
 
@@ -138,6 +163,15 @@ class ParquetTableRecorder:
                     )
 
                 print("Appending to the existing file.")
+                self.writer = pq.ParquetWriter(
+                    self.filepath, self.schema, compression=self.compression
+                )
+                # write the existing table to the new file
+                self.writer.write_table(existing_table)
+        else:
+            self.writer = pq.ParquetWriter(
+                self.filepath, self.schema, compression=self.compression
+            )
         self.recording = True
 
     def record(self, record_data: dict):
@@ -162,11 +196,12 @@ class ParquetTableRecorder:
         """Writes the current batch of data to the parquet file."""
         # Concatenate all tables in the batch and write to parquet
         combined_batch = pa.concat_tables(self.batch)
-        pq.write_table(combined_batch, self.filepath)
+        self.writer.write_table(combined_batch)
         print(f"Batch written to {self.filepath}")
 
     def close(self):
         """Finalizes the parquet file by writing any remaining data and closing the file."""
         if self.batch:
             self._write_batch()  # Write any remaining records
+        self.writer.close()
         self.recording = False
