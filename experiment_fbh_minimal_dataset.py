@@ -44,7 +44,7 @@ class MetaParams:
     btsp_fq: float | list = 0.0
     btsp_fw: float | list = 0.0
     output_dim: int | list = 0
-    btsp_topk: int | list = 0
+    btsp_topk_proportion: int | list = 0
     feedback_threshold: float | list = 0.0
 
     fly_hashing_sparsity: float | list = 0.0
@@ -115,7 +115,7 @@ class FBHMinimalDatasetExp(ExperimentInterface):
             # btsp_fq=0.001,
             btsp_fw=1,
             output_dim=19500,
-            btsp_topk=np.arange(1, 201, 20).tolist(),
+            btsp_topk_proportion=np.linspace(0.0001, 0.01, 10).tolist(),
             # btsp_topk=10,
             feedback_threshold=0,
             fly_hashing_sparsity=np.linspace(0.01, 0.1, 10).tolist(),
@@ -145,7 +145,7 @@ class FBHMinimalDatasetExp(ExperimentInterface):
         ).schema
 
         # for debugging
-        print(pa.unify_schemas([self.result_schema, self.data_schema]))
+        # print(pa.unify_schemas([self.result_schema, self.data_schema]))
 
         self.data_recorder = logging.ParquetTableRecorder(
             os.path.join(self.experiment_folder, self.metadata_file_name),
@@ -233,7 +233,7 @@ class FBHMinimalDatasetExp(ExperimentInterface):
                         meta_combination.device,
                     ),
                     layers.TopKLayerParams(
-                        meta_combination.btsp_topk,
+                        int(meta_combination.btsp_topk_proportion * meta_combination.output_dim),
                     ),
                     layers.StepLayerParams(
                         threshold=1e-6,
